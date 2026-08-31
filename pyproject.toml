@@ -41,6 +41,17 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "mabgames",
     "nbclient>=0.11.0",
     "nbconvert>=7.17.1",
+    "pytest>=8.0",
 ]
+
+# AD7 — the MABSTRUCT Studio backend is a workspace member with its own
+# dependency list, resolved into this one lockfile and installed into the
+# shared .venv at the repo root. The notebooks keep working unchanged.
+[tool.uv.workspace]
+members = ["mabstruct_studio/backend"]
+
+[tool.uv.sources]
+mabgames = { workspace = true }

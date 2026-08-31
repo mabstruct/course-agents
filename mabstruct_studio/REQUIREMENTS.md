@@ -345,10 +345,11 @@ notebooks keep working unchanged and there is still no venv inside `mabstruct_st
 **Consequence.** Backend dependencies are added with `uv add <pkg>` from `backend/`, not from
 the parent. The parent repo remains the place to add anything the notebooks need.
 
-## Domain schema (sketch)
+## Domain schema
 
-Falls out of R3, R4, R6, R7 and Q4 above. Indicative, not final — the shape is settled, the
-columns are not.
+**Implemented 2026-08-31** at `backend/src/mabgames/domain/models.py`, with the queries in
+`repository.py` and nine tests in `backend/tests/test_domain.py`. Falls out of R3, R4, R6,
+R7 and Q4.
 
 ```
 titles     (id, title, created_at)
@@ -357,18 +358,47 @@ ideas      (id, title_id, sub_title, genre, style, reason,
 designs    (id, idea_id, brief, created_at)
 builds     (id, idea_id, design_id, html_path, tier0_pass, summary,
             refurb_of, refurb_entry, created_at)
-deploys    (id, build_id, slug, site_url, created_at)
+deploys    (id, build_id, slug, site_url, deployed, summary, created_at)
 feedback   (id, build_id, rating, comment, created_at)
 candidates (title_id, build_id, updated_at)
 ```
 
 - `titles` is R6's grouping key; every idea for "The Big Swallow" hangs off one row.
-- Status (R3) is **not a column** — it is the newest stage row that exists for an idea.
+- `ideas.id` **is** the notebook's `idea_id` — the UUID assigned after the LLM returns, which
+  joins every later stage. `features` is a JSON column.
+- `designs.brief` holds the whole `GameDesignBrief` as one JSON document. It is authored
+  wholesale by the design agent and never queried field by field, so seventeen columns would
+  buy nothing.
 - `builds.refurb_of` + `refurb_entry` (`design` | `develop`) carry R4's lineage.
 - `deploys.slug` is Q4/AD5's answer: slug identity lives here, never in a file inside the
-  build directory that a copy could duplicate.
-- `feedback.rating` (1–5) is the only ranking signal (R7/Q1). `candidates` holds the one
-  production candidate per title.
+  build directory that a copy could duplicate. **The app writes no `herenow.json`.**
+- `deploys` gained `deployed` + `summary` beyond the original sketch, so a Tier-0 gate skip
+  is a real row (`deployed=False`) rather than a missing one — matching the notebook, which
+  records a skipped deploy instead of raising.
+- `feedback.rating` (1–5) is the only ranking signal (R7/Q1), and is **optional**: "the
+  controls feel floaty" is a useful refurb request whether or not a number came with it.
+
+**Status (R3) is not a column** — it is derived by `repository.idea_status`. The rules,
+because two of them are judgement calls rather than consequences:
+
+1. `rejected` wins over everything. It is an explicit human act, and an idea can be rejected
+   after it was built.
+2. `deployed` if any build for the idea has a deploy with `deployed=True`.
+3. `failed` if builds exist, none went live, and the **newest** one failed Tier-0. An earlier
+   successful deploy outranks a later Tier-0 failure — the idea did reach `deployed`.
+4. Otherwise `developed` → `designed` → `ideated`, by the newest stage row that exists.
+
+**`candidates` is a cache, not a second source of truth.** `production_candidate` derives the
+answer (highest mean rating, else newest Tier-0-passing deploy); `recompute_candidate` upserts
+it so the AD5 start page can read one row per title instead of running the ranking query per
+title. Call it after a deploy or a new rating.
+
+*Rough edge, accepted:* rows are ordered by `created_at` at microsecond resolution, so two
+rows written in the same microsecond have no defined order. This is a single-operator studio,
+not a write-heavy service.
+
+*Not yet built:* migrations. `create_db_and_tables()` creates what is missing and does not
+alter what exists, which is enough while the schema is still moving and nothing is in it.
 
 ## Decisions log
 

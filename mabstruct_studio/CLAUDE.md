@@ -21,9 +21,10 @@ and wrap it in the three things the notebook cannot do —
 - **a feedback loop**, so deployed games can be rated, refurbished, ranked, and so lessons
   compound into later games (R4, R5, R7).
 
-Nothing of the application exists yet. Today this directory holds two notebooks and their
-output. Everything below *The reference implementation* describes that notebook — the thing
-being ported *from*, not the target.
+**Status: the backend skeleton and AD1's domain layer exist; the graph and API do not.**
+`backend/src/mabgames/domain/` holds the seven-table schema, the repository, and nine passing
+tests. `graph/` and `api/` are docstring-only placeholders. Everything below *The reference
+implementation* describes the notebook — the thing being ported *from*, not the target.
 
 ### Where application code goes
 
@@ -34,15 +35,15 @@ mabstruct_studio/
 ├── mabstruct_studio.ipynb          # spike environment — stays at root
 ├── mabstruct_experimenting.ipynb
 ├── dev-output/                     # gitignored notebook output
-├── backend/
+├── backend/                        # EXISTS
 │   ├── pyproject.toml              # uv workspace member; package name `mabgames`
 │   ├── src/mabgames/
-│   │   ├── domain/                 # AD1 — schema, models, repository
-│   │   ├── graph/                  # AD2 — phases ported from the notebook
-│   │   ├── api/                    # AD3 — routes, run lifecycle
-│   │   └── config.py
-│   └── tests/
-└── frontend/                       # AD4 — TS + Vite
+│   │   ├── domain/                 # AD1 — models.py, db.py, repository.py  [built]
+│   │   ├── graph/                  # AD2 — phases ported from the notebook  [placeholder]
+│   │   ├── api/                    # AD3 — routes, run lifecycle            [placeholder]
+│   │   └── config.py               # env, keys, paths                       [built]
+│   └── tests/                      # pytest — test_domain.py, 9 tests
+└── frontend/                       # AD4 — TS + Vite                        [not started]
 ```
 
 - Imports read `from mabgames.domain import Idea` — the directory is `backend/`, the package
@@ -53,6 +54,13 @@ mabstruct_studio/
   There is no top-level `tests/`; `e2e/` appears only when a real cross-stack test exists.
 - **Backend dependencies:** `uv add <pkg>` from `backend/`. The parent repo stays the place
   to add anything the *notebooks* need. One shared `.venv` at the repo root still serves both.
+  The root `pyproject.toml` carries `[tool.uv.workspace]` plus a dev-group dependency on
+  `mabgames` (`tool.uv.sources` → `workspace = true`), so a plain `uv sync` at the repo root
+  installs the backend editable into the shared venv — and the spike notebooks can
+  `import mabgames` when porting. Declare what the backend imports in `backend/pyproject.toml`
+  even when the parent already has it; nothing should ride in on the course repo's list.
+- **Run the tests:** `cd backend && ../../.venv/bin/python -m pytest`. There is still no
+  linter, and the frontend has no runner yet.
 
 ### Working rules
 
