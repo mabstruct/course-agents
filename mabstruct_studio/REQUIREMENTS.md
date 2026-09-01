@@ -348,10 +348,10 @@ the parent. The parent repo remains the place to add anything the notebooks need
 ## Domain schema
 
 **Implemented 2026-08-31** at `backend/src/mabgames/domain/models.py`, with the queries in
-`repository.py` and nine tests in `backend/tests/test_domain.py`. Falls out of R3, R4, R6,
-R7 and Q4.
+`repository.py` and tests in `backend/tests/`. Falls out of R3, R4, R6, R7 and Q4.
 
 ```
+runs       (id, title_id, status, error, created_at, updated_at)
 titles     (id, title, created_at)
 ideas      (id, title_id, sub_title, genre, style, reason,
             description, features, created_at, rejected_at)
@@ -363,6 +363,15 @@ feedback   (id, build_id, rating, comment, created_at)
 candidates (title_id, build_id, updated_at)
 ```
 
+- **`runs` was added 2026-09-01**, beyond the original sketch, to serve R2. `Run.id` **is**
+  the LangGraph `thread_id` — no second column to keep in sync. Without it, a run that has not
+  finished IDEATION has produced no domain rows at all, so it would be invisible to the human
+  who comes back days later in another process; and finding it would mean scanning checkpoint
+  blobs, which is exactly what AD1 rejected. `status` is a cache of the checkpointer's truth
+  (`running` | `awaiting_selection` | `completed` | `failed`), refreshed on every drain.
+  *The division:* the domain DB answers what exists **across** runs; the checkpointer answers
+  what **one** run is doing right now. Nothing is copied from graph state into the DB merely to
+  make it queryable.
 - `titles` is R6's grouping key; every idea for "The Big Swallow" hangs off one row.
 - `ideas.id` **is** the notebook's `idea_id` — the UUID assigned after the LLM returns, which
   joins every later stage. `features` is a JSON column.
@@ -419,6 +428,36 @@ Every question that was blocking work is now answered. Resolved 2026-08-31 unles
 **Nothing blocks implementation.** Three things to carry forward rather than forget: keep the
 domain API mountable so Q5 stays reversible, stand up the owned-subdomain start page once the
 app runs, and revisit R5 once there is history.
+
+### Delivered 2026-09-01 — R1, R2, R6
+
+The first vertical slice runs: `IDEATION → SELECT (interrupt) → DESIGN`, persisted. Proven
+end to end against a live server — ideation paused, the process was killed, a new process
+picked the run up from the checkpoint and resumed it into DESIGN.
+
+**Where persistence happens: the API, not the graph nodes.** The nodes stay pure state
+transformers with no knowledge of the database, so they remain runnable in the spike notebook;
+`api/lifecycle.py` consumes the graph's `stream_mode="updates"` output and calls the
+repository. This costs almost nothing because the API must consume that stream anyway, and it
+works because **the ideation delta arrives before `__interrupt__`** — the ideas are on disk
+before the human is asked to choose between them. `tests/test_layering.py` enforces the rule
+by AST: nothing under `graph/` may import `mabgames.domain`.
+
+Two consequences worth not rediscovering:
+
+- **Pydantic objects in graph state must be declared to the checkpoint serializer.** Without
+  `JsonPlusSerializer(allowed_msgpack_modules=...)`, langgraph warns that deserializing
+  `GameIdeaList` from a checkpoint *"will be blocked in a future version"* — and that load is
+  precisely R2's resume path. `graph.studio.STATE_TYPES` is the allowlist, and it pins module
+  paths: moving `graph/models.py` orphans every paused run.
+- **`ChatOpenAI` raises at construction without a key**, and pydantic-settings does not
+  populate `os.environ`. The notebook's module-level model cell therefore cannot port
+  literally; `graph/agents.py` uses factories that pass `api_key=` explicitly. This is what
+  keeps `import mabgames.graph` free of import-time work (AD3).
+
+Still open in this slice, deliberately: runs are synchronous HTTP calls with no progress
+streaming (background jobs arrive with DEVELOP, which needs them), ideas are not attributed to
+the run that produced them, and there is no retry endpoint for a failed run.
 
 ## Parked
 

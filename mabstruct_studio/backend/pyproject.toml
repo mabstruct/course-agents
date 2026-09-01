@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "httpx>=0.28.1"]  # httpx: Starlette TestClient
 
 [build-system]
 requires = ["hatchling"]

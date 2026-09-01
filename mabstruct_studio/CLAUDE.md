@@ -21,10 +21,12 @@ and wrap it in the three things the notebook cannot do —
 - **a feedback loop**, so deployed games can be rated, refurbished, ranked, and so lessons
   compound into later games (R4, R5, R7).
 
-**Status: the backend skeleton and AD1's domain layer exist; the graph and API do not.**
-`backend/src/mabgames/domain/` holds the seven-table schema, the repository, and nine passing
-tests. `graph/` and `api/` are docstring-only placeholders. Everything below *The reference
-implementation* describes the notebook — the thing being ported *from*, not the target.
+**Status: the first slice runs — `IDEATION → SELECT (interrupt) → DESIGN`, persisted.**
+R1, R2 and R6 are delivered and proven end to end against a live server. `domain/` holds the
+eight-table schema and repository; `graph/` holds the ported phases; `api/` holds the routes
+and the run lifecycle. **DEVELOP and DEPLOY are not ported yet** — they are the next slice, and
+they port into the same seam. Everything below *The reference implementation* describes the
+notebook — the thing being ported *from*, not the target.
 
 ### Where application code goes
 
@@ -39,10 +41,11 @@ mabstruct_studio/
 │   ├── pyproject.toml              # uv workspace member; package name `mabgames`
 │   ├── src/mabgames/
 │   │   ├── domain/                 # AD1 — models.py, db.py, repository.py  [built]
-│   │   ├── graph/                  # AD2 — phases ported from the notebook  [placeholder]
-│   │   ├── api/                    # AD3 — routes, run lifecycle            [placeholder]
+│   │   ├── graph/                  # AD2 — IDEATION, SELECT, DESIGN         [built]
+│   │   │                           #       DEVELOP + DEPLOY still to port
+│   │   ├── api/                    # AD3 — routes + lifecycle.py (the seam) [built]
 │   │   └── config.py               # env, keys, paths                       [built]
-│   └── tests/                      # pytest — test_domain.py, 9 tests
+│   └── tests/                      # pytest — 36 tests, no LLM call
 └── frontend/                       # AD4 — TS + Vite                        [not started]
 ```
 
@@ -59,8 +62,12 @@ mabstruct_studio/
   installs the backend editable into the shared venv — and the spike notebooks can
   `import mabgames` when porting. Declare what the backend imports in `backend/pyproject.toml`
   even when the parent already has it; nothing should ride in on the course repo's list.
-- **Run the tests:** `cd backend && ../../.venv/bin/python -m pytest`. There is still no
-  linter, and the frontend has no runner yet.
+- **Run the tests:** `cd backend && ../../.venv/bin/python -m pytest`. No test calls an LLM —
+  `build_studio_graph` takes its agents as arguments, so tests use the real graph, interrupt
+  and checkpointer with fake agents. There is still no linter, and no frontend yet.
+- **Run the app:** `cd backend && ../../.venv/bin/python -m uvicorn mabgames.api.app:app`.
+  It writes `backend/mabgames.db` (durable) and `backend/checkpoints.db` (disposable), both
+  gitignored.
 
 ### Working rules
 
@@ -85,6 +92,22 @@ mabstruct_studio/
 - **The notebook is the spike environment. Port from it; do not fork it.** New phases get
   prototyped in a notebook and moved into the app — the notebook stays the place to
   experiment.
+- **The API persists; graph nodes never do.** Nodes are pure state transformers that must not
+  import `mabgames.domain` (enforced by `tests/test_layering.py`, by AST). `api/lifecycle.py`
+  consumes `stream_mode="updates"` and maps node name → repository call via `PERSISTERS`.
+  Adding a phase means adding an entry there or to `NO_PERSIST` — `test_every_graph_node_is_
+  accounted_for` fails otherwise. Commit per node, never one transaction over the run: that
+  makes persistence granularity match checkpoint granularity.
+- **Three things that will bite when porting DEVELOP/DEPLOY:**
+  - Pydantic objects in graph state must be added to `graph.studio.STATE_TYPES`, or the
+    checkpoint serializer warns and will eventually refuse. That allowlist pins module paths —
+    moving `graph/models.py` orphans every paused run.
+  - `ChatOpenAI` raises at construction with no key and pydantic-settings does not populate
+    `os.environ`, so models are built by factories in `graph/agents.py` that pass `api_key=`.
+    Never construct a model at module scope.
+  - The notebook's `develop_node`/`deployment_node` read `state["game_ideation"][0]` and a
+    bare `GameDesignBrief` — shapes only their hand-built state has. Against the real state
+    those become `.ideas[...]` and `design.brief.…`.
 - Keep the expensive knowledge intact when porting. The develop phase's model config,
   streaming behaviour, retry middleware, chunked tool protocol and Tier-0 validation were
   all won the hard way (see *The develop phase* below).

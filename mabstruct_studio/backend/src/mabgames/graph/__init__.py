@@ -1,15 +1,44 @@
 """AD2 — the LangGraph pipeline, ported from `mabstruct_studio.ipynb`.
 
-Empty for now. What lands here, and the two rough edges the port closes:
+IDEATION -> SELECT (R2's human decision point) -> DESIGN. DEVELOP and DEPLOY
+port into this same graph next; the notebook's model config, streaming
+behaviour, retry middleware, chunked tool protocol and Tier-0 validation carry
+over as-is when they do.
 
-* `state.py`, `prompts.py`, `models.py`, then `ideation.py`, `design.py`,
-  `develop.py`, `deploy.py` and `tools/`.
-* The notebook runs DEVELOP and DEPLOY as separate single-node graphs driven by
-  hand-assembled state, so their node bodies read shapes that only that state
-  has. Here all four phases join **one** graph.
-* `CHOSEN_IDEA_INDEX = 0` becomes R2's `interrupt()` and a stored human choice.
-
-Port from the notebook; do not fork it. The develop phase's model config,
-streaming behaviour, retry middleware, chunked tool protocol and Tier-0
-validation were won the hard way and carry over as-is.
+**Nothing here may import `mabgames.domain`.** These nodes are pure state
+transformers so they stay runnable in the spike notebook; the API persists their
+output by consuming the update stream. `tests/test_layering.py` enforces it.
 """
+
+from mabgames.graph.models import (
+    GameDesignBrief,
+    GameDesignRecord,
+    GameIdea,
+    GameIdeaList,
+)
+from mabgames.graph.select_idea import SELECT_IDEA_INTERRUPT_KIND
+from mabgames.graph.state import GameStudioState, initial_state
+from mabgames.graph.studio import (
+    DESIGN_NODE,
+    IDEATION_NODE,
+    SELECT_IDEA_NODE,
+    STATE_TYPES,
+    build_studio_graph,
+    make_checkpointer,
+)
+
+__all__ = [
+    "DESIGN_NODE",
+    "GameDesignBrief",
+    "GameDesignRecord",
+    "GameIdea",
+    "GameIdeaList",
+    "GameStudioState",
+    "IDEATION_NODE",
+    "SELECT_IDEA_INTERRUPT_KIND",
+    "SELECT_IDEA_NODE",
+    "STATE_TYPES",
+    "build_studio_graph",
+    "initial_state",
+    "make_checkpointer",
+]

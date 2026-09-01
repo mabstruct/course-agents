@@ -14,6 +14,8 @@ from mabgames.domain.models import (
     Idea,
     IdeaStatus,
     RefurbEntry,
+    Run,
+    RunStatus,
     Title,
 )
 
@@ -26,6 +28,8 @@ __all__ = [
     "Idea",
     "IdeaStatus",
     "RefurbEntry",
+    "Run",
+    "RunStatus",
     "Title",
     "create_db_and_tables",
     "get_engine",

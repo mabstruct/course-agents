@@ -152,3 +152,36 @@ class Candidate(SQLModel, table=True):
     title_id: uuid.UUID = Field(foreign_key="titles.id", primary_key=True)
     build_id: uuid.UUID = Field(foreign_key="builds.id")
     updated_at: datetime = Field(default_factory=_now)
+
+
+class RunStatus(str, Enum):
+    """Where a pipeline execution is. Distinct from `IdeaStatus`, which is derived."""
+
+    RUNNING = "running"
+    AWAITING_SELECTION = "awaiting_selection"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class Run(SQLModel, table=True):
+    """One pipeline execution. **`Run.id` is the LangGraph `thread_id`** (R2).
+
+    The domain DB owns the *list* of runs so "which runs are waiting on a human?"
+    is an indexed query; the checkpointer still owns what any one run is doing
+    right now. Without this table a run that has not finished IDEATION has
+    produced no domain rows at all, so it would be invisible to the human who
+    comes back days later from another process — and finding it would mean
+    scanning checkpoint blobs, which is the thing AD1 rejected.
+
+    `status` is a cache of the checkpointer's truth, refreshed on every drain —
+    the same pattern as `candidates`.
+    """
+
+    __tablename__ = "runs"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    title_id: uuid.UUID = Field(foreign_key="titles.id", index=True)
+    status: RunStatus = Field(default=RunStatus.RUNNING, index=True)
+    error: str | None = None
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)

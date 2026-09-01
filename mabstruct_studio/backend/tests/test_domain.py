@@ -182,3 +182,21 @@ def test_rating_outside_1_to_5_is_refused(session):
     # A comment with no rating is legitimate: it is an R4 refurb request.
     note = repo.record_feedback(session, build.id, comment="the controls feel floaty")
     assert note.rating is None
+
+
+def test_record_ideas_honours_a_supplied_id(session):
+    """The pipeline assigns idea_id in graph state; the row must carry the same one."""
+    import uuid
+
+    title = repo.get_or_create_title(session, "The Big Swallow")
+    assigned = str(uuid.uuid4())
+
+    (idea,) = repo.record_ideas(session, title.id, [{**IDEAS[0], "idea_id": assigned}])
+
+    assert str(idea.id) == assigned
+
+
+def test_record_ideas_still_mints_an_id_when_none_is_given(session):
+    title = repo.get_or_create_title(session, "The Big Swallow")
+    (idea,) = repo.record_ideas(session, title.id, IDEAS[:1])
+    assert idea.id is not None

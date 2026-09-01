@@ -25,6 +25,8 @@ from mabgames.domain.models import (
     Idea,
     IdeaStatus,
     RefurbEntry,
+    Run,
+    RunStatus,
     Title,
 )
 
@@ -45,16 +47,26 @@ def get_or_create_title(session: Session, title: str) -> Title:
     return row
 
 
+def _idea_id(idea: Mapping[str, Any]) -> uuid.UUID:
+    """Honour the id the pipeline already assigned, else mint one.
+
+    `ideation_node` tags every idea with a UUID *in graph state*, and each later
+    stage joins on it — so the row and the state must carry the same id or the
+    design would be recorded against an idea that does not exist. The LLM still
+    never generates it; the node does. Accepts either spelling so the mapping can
+    come straight from `GameIdea.model_dump()` or from an `Idea` row.
+    """
+    supplied = idea.get("idea_id") or idea.get("id")
+    return uuid.UUID(str(supplied)) if supplied else uuid.uuid4()
+
+
 def record_ideas(
     session: Session, title_id: uuid.UUID, ideas: Iterable[Mapping[str, Any]]
 ) -> list[Idea]:
-    """R1 — persist *every* idea ideation produced, not just the chosen one.
-
-    Each mapping carries the GameIdea fields; `id` is assigned here, which is the
-    notebook's rule that the LLM never generates the idea_id.
-    """
+    """R1 — persist *every* idea ideation produced, not just the chosen one."""
     rows = [
         Idea(
+            id=_idea_id(idea),
             title_id=title_id,
             sub_title=idea["sub_title"],
             genre=idea["genre"],
@@ -305,3 +317,50 @@ def build_lineage(session: Session, build: Build) -> Sequence[Build]:
         seen.add(parent.id)
         current = parent
     return chain
+
+
+# --------------------------------------------------------------------------- #
+# R2 — runs, so a pause can be found again days later
+# --------------------------------------------------------------------------- #
+
+
+def list_titles(session: Session) -> list[Title]:
+    """Every title the studio has worked on, newest first."""
+    return list(
+        session.exec(select(Title).order_by(col(Title.created_at).desc())).all()
+    )
+
+
+def create_run(session: Session, title_id: uuid.UUID) -> Run:
+    """Start a run. Its `id` becomes the LangGraph thread_id."""
+    row = Run(title_id=title_id)
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+def get_run(session: Session, run_id: uuid.UUID) -> Run | None:
+    return session.get(Run, run_id)
+
+
+def list_runs(session: Session, status: RunStatus | None = None) -> list[Run]:
+    """R2 — `status=AWAITING_SELECTION` answers "which runs are waiting on me?"."""
+    statement = select(Run)
+    if status is not None:
+        statement = statement.where(Run.status == status)
+    return list(
+        session.exec(statement.order_by(col(Run.created_at).desc())).all()
+    )
+
+
+def set_run_status(
+    session: Session, run: Run, status: RunStatus, error: str | None = None
+) -> Run:
+    run.status = status
+    run.error = error
+    run.updated_at = datetime.now(UTC)
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return run
