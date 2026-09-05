@@ -55,3 +55,31 @@ class GameDesignRecord(BaseModel):
 
     idea_id: str = Field(description="Matches GameIdea.idea_id")
     brief: GameDesignBrief
+
+
+class GameDevelopRecord(BaseModel):
+    """Built HTML game linked to one design brief.
+
+    `build_id` is new against the notebook, which keyed everything on `idea_id`
+    because it assumed one build per idea. Q4/AD5 says the build owns its URL and
+    its output directory, so the build needs its own identity — minted by
+    `develop_node` before it writes anything, the same way `ideation_node` mints
+    `idea_id`.
+    """
+
+    idea_id: str = Field(description="Matches GameIdea.idea_id")
+    build_id: str = Field(description="Unique id assigned by develop_node before writing")
+    html_path: str = Field(description="Path to the written index.html")
+    tier0_pass: bool = Field(description="Whether static Tier-0 validation passed")
+    summary: str = Field(description="Developer confirmation: MVP vs deferred, validation notes")
+
+
+class GameDeployRecord(BaseModel):
+    """Live here.now site linked to one built game."""
+
+    idea_id: str = Field(description="Matches GameIdea.idea_id")
+    build_id: str = Field(description="Matches GameDevelopRecord.build_id — the build owns the URL")
+    slug: str = Field(default="", description="here.now slug, recorded in the domain DB")
+    site_url: str = Field(default="", description="Live URL for internal playtesting")
+    deployed: bool = Field(description="Whether the game is live and verified")
+    summary: str = Field(description="Deployment confirmation: URL, permanence, gate notes")

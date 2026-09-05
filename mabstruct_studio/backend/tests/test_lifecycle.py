@@ -42,10 +42,11 @@ def test_design_row_joins_the_chosen_idea(session, graph):
     started = lifecycle.start_run(session, graph, "The Big Swallow")
     chosen = uuid.UUID(started.interrupt["ideas"][2]["idea_id"])
 
-    resumed = lifecycle.resume_run(session, graph, started.run, chosen)
+    resumed = lifecycle.select_idea(session, graph, started.run, chosen)
 
-    assert resumed.run.status is RunStatus.COMPLETED
-    assert resumed.interrupt is None
+    # Design done, paused at the build gate — nothing expensive has run.
+    assert resumed.run.status is RunStatus.AWAITING_BUILD_APPROVAL
+    assert resumed.interrupt["kind"] == "approve_build"
     assert len(resumed.designs) == 1
     assert resumed.designs[0].idea_id == chosen
     assert resumed.designs[0].brief["game_sub_title"] == "Idea 2"
@@ -60,7 +61,7 @@ def test_unchosen_ideas_are_not_rejected(session, graph):
     """R1/R3 — not choosing is not rejecting. They are R7's comparison set."""
     started = lifecycle.start_run(session, graph, "The Big Swallow")
     chosen = uuid.UUID(started.interrupt["ideas"][2]["idea_id"])
-    resumed = lifecycle.resume_run(session, graph, started.run, chosen)
+    resumed = lifecycle.select_idea(session, graph, started.run, chosen)
 
     statuses = [s for _, s in lifecycle.ideas_for_run(session, resumed.run)]
     assert statuses.count(IdeaStatus.IDEATED) == 4
@@ -71,7 +72,7 @@ def test_selecting_an_idea_the_run_never_offered_is_refused(session, graph):
     started = lifecycle.start_run(session, graph, "The Big Swallow")
 
     with pytest.raises(lifecycle.UnknownIdea):
-        lifecycle.resume_run(session, graph, started.run, uuid.uuid4())
+        lifecycle.select_idea(session, graph, started.run, uuid.uuid4())
 
     # The paused thread is untouched and still selectable — the payoff for
     # validating here rather than letting the node raise mid-stream.
@@ -82,10 +83,10 @@ def test_selecting_an_idea_the_run_never_offered_is_refused(session, graph):
 def test_selecting_twice_is_a_conflict(session, graph):
     started = lifecycle.start_run(session, graph, "The Big Swallow")
     chosen = uuid.UUID(started.interrupt["ideas"][0]["idea_id"])
-    lifecycle.resume_run(session, graph, started.run, chosen)
+    lifecycle.select_idea(session, graph, started.run, chosen)
 
     with pytest.raises(lifecycle.RunConflict):
-        lifecycle.resume_run(session, graph, started.run, chosen)
+        lifecycle.select_idea(session, graph, started.run, chosen)
 
 
 def test_an_unmapped_node_does_not_break_a_run(session, graph):
@@ -115,11 +116,11 @@ def test_runs_awaiting_a_human_are_queryable(session, graph):
     awaiting = repo.list_runs(session, RunStatus.AWAITING_SELECTION)
     assert len(awaiting) == 2
 
-    lifecycle.resume_run(
+    lifecycle.select_idea(
         session, graph, first.run, uuid.UUID(first.interrupt["ideas"][0]["idea_id"])
     )
     assert len(repo.list_runs(session, RunStatus.AWAITING_SELECTION)) == 1
-    assert len(repo.list_runs(session, RunStatus.COMPLETED)) == 1
+    assert len(repo.list_runs(session, RunStatus.AWAITING_BUILD_APPROVAL)) == 1
 
 
 def test_design_persister_is_wired_to_the_design_node():
@@ -154,8 +155,9 @@ def test_a_pause_survives_a_restart(session, agents, checkpoint_path, file_graph
     assert state.values["game_ideation"].ideas[3].idea_id == str(chosen)
 
     run = repo.get_run(session, started.run.id)
-    resumed = lifecycle.resume_run(session, reopened, run, chosen)
+    resumed = lifecycle.select_idea(session, reopened, run, chosen)
     assert resumed.designs[0].idea_id == chosen
+    assert resumed.run.status is RunStatus.AWAITING_BUILD_APPROVAL
 
     unregistered = [w for w in recwarn if "unregistered type" in str(w.message)]
     assert not unregistered, [str(w.message) for w in unregistered]

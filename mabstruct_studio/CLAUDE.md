@@ -21,12 +21,13 @@ and wrap it in the three things the notebook cannot do —
 - **a feedback loop**, so deployed games can be rated, refurbished, ranked, and so lessons
   compound into later games (R4, R5, R7).
 
-**Status: the first slice runs — `IDEATION → SELECT (interrupt) → DESIGN`, persisted.**
-R1, R2 and R6 are delivered and proven end to end against a live server. `domain/` holds the
-eight-table schema and repository; `graph/` holds the ported phases; `api/` holds the routes
-and the run lifecycle. **DEVELOP and DEPLOY are not ported yet** — they are the next slice, and
-they port into the same seam. Everything below *The reference implementation* describes the
-notebook — the thing being ported *from*, not the target.
+**Status: the whole pipeline runs in the app** — `IDEATION → SELECT → DESIGN → APPROVE →
+DEVELOP → DEPLOY`, in one graph, persisted, with two human decision points. A title becomes a
+playable game at a live here.now URL. Proven end to end. R1, R2, R3, R6 delivered; **R4
+(feedback/refurb) and R7 (leaderboard) are the next slice** — `repository.leaderboard` and
+`production_candidate` are written and tested but not yet exposed over HTTP, and
+`builds.refurb_of` is still unused. Everything below *The reference implementation* describes
+the notebook — the thing being ported *from*, not the target.
 
 ### Where application code goes
 
@@ -41,11 +42,11 @@ mabstruct_studio/
 │   ├── pyproject.toml              # uv workspace member; package name `mabgames`
 │   ├── src/mabgames/
 │   │   ├── domain/                 # AD1 — models.py, db.py, repository.py  [built]
-│   │   ├── graph/                  # AD2 — IDEATION, SELECT, DESIGN         [built]
-│   │   │                           #       DEVELOP + DEPLOY still to port
+│   │   ├── graph/                  # AD2 — all four phases + two gates      [built]
+│   │   │   └── tools/              #       html_writer, herenow, notify
 │   │   ├── api/                    # AD3 — routes + lifecycle.py (the seam) [built]
 │   │   └── config.py               # env, keys, paths                       [built]
-│   └── tests/                      # pytest — 36 tests, no LLM call
+│   └── tests/                      # pytest — 68 tests, no LLM, no network
 └── frontend/                       # AD4 — TS + Vite                        [not started]
 ```
 
@@ -98,16 +99,25 @@ mabstruct_studio/
   Adding a phase means adding an entry there or to `NO_PERSIST` — `test_every_graph_node_is_
   accounted_for` fails otherwise. Commit per node, never one transaction over the run: that
   makes persistence granularity match checkpoint granularity.
-- **Three things that will bite when porting DEVELOP/DEPLOY:**
+- **Everything expensive is injected, and that is not stylistic — it is what keeps tests off
+  the network and off the model API.** `build_studio_graph` takes `ideation_agent`,
+  `design_agent`, `develop_agent_factory`, `deploy_agent_factory`, `dev_tools_factory`,
+  `deploy_tools_factory` and `builds_dir`. DEVELOP and DEPLOY take agent *factories* because
+  their tools are closures over one build. **Never bind a real factory as a default argument**
+  — the node captures it when the graph is built, so a later monkeypatch silently does nothing
+  and the test publishes to here.now for real. That happened once; injection is the fix.
+- **Three things that bite, learned the hard way:**
   - Pydantic objects in graph state must be added to `graph.studio.STATE_TYPES`, or the
     checkpoint serializer warns and will eventually refuse. That allowlist pins module paths —
     moving `graph/models.py` orphans every paused run.
   - `ChatOpenAI` raises at construction with no key and pydantic-settings does not populate
     `os.environ`, so models are built by factories in `graph/agents.py` that pass `api_key=`.
-    Never construct a model at module scope.
-  - The notebook's `develop_node`/`deployment_node` read `state["game_ideation"][0]` and a
-    bare `GameDesignBrief` — shapes only their hand-built state has. Against the real state
-    those become `.ideas[...]` and `design.brief.…`.
+    Never construct a model at module scope. The same applies to `DEVELOP_MIDDLEWARE`, which
+    is now `make_develop_middleware(model)`.
+  - **`create_db_and_tables()` has run out of road.** It creates missing tables but never
+    alters existing ones. Adding `awaiting_build_approval` widened a `VARCHAR(18)` column that
+    SQLite happily ignored and Postgres would have rejected. The next schema change needs a
+    real migration.
 - Keep the expensive knowledge intact when porting. The develop phase's model config,
   streaming behaviour, retry middleware, chunked tool protocol and Tier-0 validation were
   all won the hard way (see *The develop phase* below).

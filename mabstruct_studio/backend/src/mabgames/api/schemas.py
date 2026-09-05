@@ -39,6 +39,15 @@ class SelectIdeaPrompt(BaseModel):
     ideas: list[IdeaOut]
 
 
+class ApproveBuildPrompt(BaseModel):
+    """The build gate: read the brief, then decide whether to pay for the build."""
+
+    kind: Literal["approve_build"]
+    game_title: str
+    idea_id: uuid.UUID
+    brief: dict
+
+
 class DesignOut(BaseModel):
     id: uuid.UUID
     idea_id: uuid.UUID
@@ -55,11 +64,35 @@ class RunSummary(BaseModel):
     updated_at: datetime
 
 
+class BuildOut(BaseModel):
+    id: uuid.UUID
+    idea_id: uuid.UUID
+    design_id: uuid.UUID
+    html_path: str
+    tier0_pass: bool
+    summary: str
+    created_at: datetime
+
+
+class DeployOut(BaseModel):
+    id: uuid.UUID
+    build_id: uuid.UUID
+    slug: str
+    site_url: str
+    deployed: bool
+    summary: str
+    created_at: datetime
+
+
 class RunOut(RunSummary):
-    # Present exactly when status is awaiting_selection. This — not a DB query —
-    # is the authoritative list of what *this run* offered.
-    awaiting: SelectIdeaPrompt | None = None
+    # Present exactly when the run is paused. Taken from the interrupt payload —
+    # not a DB query — so it is authoritative for what *this run* offered.
+    awaiting: SelectIdeaPrompt | ApproveBuildPrompt | None = Field(
+        default=None, discriminator="kind"
+    )
     designs: list[DesignOut] = Field(default_factory=list)
+    builds: list[BuildOut] = Field(default_factory=list)
+    deploys: list[DeployOut] = Field(default_factory=list)
 
 
 class StartRunIn(BaseModel):
@@ -68,3 +101,7 @@ class StartRunIn(BaseModel):
 
 class SelectIdeaIn(BaseModel):
     idea_id: uuid.UUID
+
+
+class ApproveBuildIn(BaseModel):
+    approved: bool = True

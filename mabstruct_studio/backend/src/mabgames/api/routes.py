@@ -6,11 +6,14 @@ its threadpool and the event loop stays free.
 
 import uuid
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Response, status
 
 from mabgames.api import lifecycle
-from mabgames.api.deps import GraphDep, SessionDep
+from mabgames.api.deps import GraphDep, SessionDep, SessionFactoryDep, TaskRunnerDep
 from mabgames.api.schemas import (
+    ApproveBuildIn,
+    BuildOut,
+    DeployOut,
     DesignOut,
     IdeaOut,
     RunOut,
@@ -20,7 +23,7 @@ from mabgames.api.schemas import (
     TitleOut,
 )
 from mabgames.domain import repository as repo
-from mabgames.domain.models import Design, Run, RunStatus
+from mabgames.domain.models import Build, Deploy, Design, Run, RunStatus
 
 router = APIRouter()
 
@@ -45,11 +48,43 @@ def _summary(run: Run) -> RunSummary:
     )
 
 
-def _run_out(run: Run, interrupt: dict | None, designs: list[Design]) -> RunOut:
+def _build_out(build: Build) -> BuildOut:
+    return BuildOut(
+        id=build.id,
+        idea_id=build.idea_id,
+        design_id=build.design_id,
+        html_path=build.html_path,
+        tier0_pass=build.tier0_pass,
+        summary=build.summary,
+        created_at=build.created_at,
+    )
+
+
+def _deploy_out(deploy: Deploy) -> DeployOut:
+    return DeployOut(
+        id=deploy.id,
+        build_id=deploy.build_id,
+        slug=deploy.slug,
+        site_url=deploy.site_url,
+        deployed=deploy.deployed,
+        summary=deploy.summary,
+        created_at=deploy.created_at,
+    )
+
+
+def _run_out(
+    run: Run,
+    interrupt: dict | None,
+    designs: list[Design] | None = None,
+    builds: list[Build] | None = None,
+    deploys: list[Deploy] | None = None,
+) -> RunOut:
     return RunOut(
         **_summary(run).model_dump(),
         awaiting=interrupt,
-        designs=[_design_out(d) for d in designs],
+        designs=[_design_out(d) for d in designs or []],
+        builds=[_build_out(b) for b in builds or []],
+        deploys=[_deploy_out(d) for d in deploys or []],
     )
 
 
@@ -76,24 +111,85 @@ def get_run(run_id: uuid.UUID, session: SessionDep, graph: GraphDep) -> RunOut:
     run = repo.get_run(session, run_id)
     if run is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no run {run_id}")
-    return _run_out(run, lifecycle.pending_interrupt(graph, run.id), [])
+    return _run_out(
+        run,
+        lifecycle.pending_interrupt(graph, run.id),
+        builds=repo.builds_for_run(session, run),
+        deploys=repo.deploys_for_run(session, run),
+    )
+
+
+def _require_run(session, run_id: uuid.UUID) -> Run:
+    run = repo.get_run(session, run_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no run {run_id}")
+    return run
 
 
 @router.post("/runs/{run_id}/select", response_model=RunOut)
 def select_idea(
     run_id: uuid.UUID, body: SelectIdeaIn, session: SessionDep, graph: GraphDep
 ) -> RunOut:
-    """R2 — pick the idea that proceeds to DESIGN, and resume the run."""
-    run = repo.get_run(session, run_id)
-    if run is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no run {run_id}")
+    """R2 — pick the idea that proceeds to DESIGN.
+
+    Runs DESIGN and stops at the build gate, so this is seconds and cents. The
+    expensive phase needs a separate, deliberate call.
+    """
+    run = _require_run(session, run_id)
     try:
-        result = lifecycle.resume_run(session, graph, run, body.idea_id)
+        result = lifecycle.select_idea(session, graph, run, body.idea_id)
     except lifecycle.RunConflict as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except lifecycle.UnknownIdea as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     return _run_out(result.run, result.interrupt, result.designs)
+
+
+@router.post("/runs/{run_id}/build", response_model=RunOut)
+def approve_build(
+    run_id: uuid.UUID,
+    body: ApproveBuildIn,
+    session: SessionDep,
+    graph: GraphDep,
+    session_factory: SessionFactoryDep,
+    run_task: TaskRunnerDep,
+    response: Response,
+) -> RunOut:
+    """The build gate: approve the brief and DEVELOP -> DEPLOY runs.
+
+    Approving returns `202` immediately and the build runs in the background —
+    it takes minutes. Poll `GET /api/runs/{run_id}` for `developing`,
+    `deploying`, `completed` or `failed`. Rejecting is instant and ends the run
+    with no build; the idea simply stays `designed`.
+    """
+    run = _require_run(session, run_id)
+
+    if not body.approved:
+        try:
+            result = lifecycle.approve_build(session, graph, run, False)
+        except lifecycle.RunConflict as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        return _run_out(result.run, result.interrupt)
+
+    if run.status is not RunStatus.AWAITING_BUILD_APPROVAL:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"run is {run.status.value}, not awaiting_build_approval",
+        )
+
+    run_task(lambda: lifecycle.approve_build_detached(session_factory, graph, run_id))
+    response.status_code = status.HTTP_202_ACCEPTED
+    session.refresh(run)
+    return _run_out(run, lifecycle.pending_interrupt(graph, run.id))
+
+
+@router.get("/builds/{build_id}", response_model=BuildOut)
+def get_build(build_id: uuid.UUID, session: SessionDep) -> BuildOut:
+    """One build: where it was written and whether Tier-0 passed."""
+    build = session.get(Build, build_id)
+    if build is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no build {build_id}")
+    return _build_out(build)
 
 
 @router.get("/titles", response_model=list[TitleOut])

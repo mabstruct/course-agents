@@ -36,8 +36,10 @@ def test_selecting_an_idea_produces_a_design(client):
 
     body = client.post(f"/api/runs/{run['run_id']}/select", json={"idea_id": chosen}).json()
 
-    assert body["status"] == "completed"
-    assert body["awaiting"] is None
+    # Stops at the build gate with the brief to read — not at a finished run.
+    assert body["status"] == "awaiting_build_approval"
+    assert body["awaiting"]["kind"] == "approve_build"
+    assert body["awaiting"]["brief"]["game_sub_title"] == "Idea 2"
     assert len(body["designs"]) == 1
     assert body["designs"][0]["idea_id"] == chosen
     assert body["designs"][0]["brief"]["game_sub_title"] == "Idea 2"

@@ -61,7 +61,12 @@ def test_design_keys_off_the_chosen_idea(graph, agents):
         )
     )
 
-    assert [next(iter(c)) for c in chunks] == [SELECT_IDEA_NODE, DESIGN_NODE]
+    # DESIGN then the build gate — the expensive phase waits for a second act.
+    assert [next(iter(c)) for c in chunks] == [
+        SELECT_IDEA_NODE,
+        DESIGN_NODE,
+        "__interrupt__",
+    ]
     record = graph.get_state(CONFIG).values["game_designs"][0]
     assert record.idea_id == chosen["idea_id"]
     assert chosen["sub_title"] in agents.design.calls[0]

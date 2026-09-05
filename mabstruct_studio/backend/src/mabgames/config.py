@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     tavily_api_key: str | None = None
 
+    # Telegram push, so the studio lead hears that a build is ready.
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+
     # here.now's key has two spellings in the wild: the parent repo's .env uses
     # HERE_NOW_API_KEY, the here.now skill and CrewAI tool use HERENOW_API_KEY.
     here_now_api_key: str | None = Field(

@@ -455,9 +455,51 @@ Two consequences worth not rediscovering:
   literally; `graph/agents.py` uses factories that pass `api_key=` explicitly. This is what
   keeps `import mabgames.graph` free of import-time work (AD3).
 
-Still open in this slice, deliberately: runs are synchronous HTTP calls with no progress
-streaming (background jobs arrive with DEVELOP, which needs them), ideas are not attributed to
-the run that produced them, and there is no retry endpoint for a failed run.
+Still open in this slice, deliberately: ideas are not attributed to the run that produced
+them, and there is no retry endpoint for a failed run.
+
+### Delivered 2026-09-05 — the pipeline is whole
+
+`IDEATION → SELECT → DESIGN → APPROVE → DEVELOP → DEPLOY`, in **one graph**. A title now
+becomes a playable game at a live URL, with `builds` and `deploys` rows to show for it.
+Proven end to end: ideation, design at the gate in 24s, then a 250s build and a 10s deploy
+serving a real 35KB game.
+
+This closes the notebook's last two rough edges. DEVELOP and DEPLOY are no longer separate
+single-node graphs fed by hand-assembled state — both now select by `chosen_idea_id` rather
+than by index — and `deploys.slug` has replaced `herenow.json`.
+
+**A second pause, before DEVELOP.** R2 asks for one, before DESIGN; this adds another, at the
+build gate. Taken deliberately: DEVELOP runs Opus at 32k `max_tokens` for minutes, and a human
+who has just read the brief is the cheapest possible check on that spend. Rejecting costs one
+design call instead of a whole build, and leaves the idea at `designed` — which the derived
+status already reports, with no new state. `RunStatus` gains `awaiting_build_approval`,
+`developing` and `deploying`.
+
+**The build owns its identity, and mints it itself.** The API persists only *after* a node
+returns, so the row cannot supply the id the node needs before it writes. `develop_node`
+generates the `build_id` — exactly as `ideation_node` generates `idea_id` — writes to
+`dev-output/<title>/<build_id>/`, and the API persists the row under that id. `record_build`
+honours a supplied id for the same reason `record_ideas` does.
+
+**The slug registry survived, as a dict.** The notebook read `herenow.json` back rather than
+trusting the agent's summary, because *an agent can describe a deploy it never made*. That
+guarantee is worth keeping; the file is not, since copying a build copied its slug. It is now
+an in-memory dict the publish tool writes and the node reads, and the API persists it into
+`deploys`. A test asserts that an agent claiming a deploy it never made produces
+`deployed=False` and no slug.
+
+**Long runs left the request.** `POST /runs/{id}/build` returns `202` and a daemon thread
+drives the graph; the seam already writes status per node, so `GET /runs/{id}` reports
+`developing` → `deploying` → `completed` with no new machinery. The thread needs its own
+session — the request's is closed by then and `Session` is not thread-safe — so both the
+session factory and the task runner are injected, which also keeps the test suite synchronous.
+
+*Migration debt is now real.* The `runs.status` column was created as `VARCHAR(18)`, sized for
+the longest name at the time; `AWAITING_BUILD_APPROVAL` is 23 characters. SQLite ignores
+length constraints so the existing database kept working, but Postgres would not have. This is
+the first change `create_db_and_tables()` could not have made honestly, and the next one needs
+migrations.
 
 ## Parked
 

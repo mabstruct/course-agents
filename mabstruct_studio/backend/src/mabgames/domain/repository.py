@@ -104,19 +104,40 @@ def record_design(session: Session, idea_id: uuid.UUID, brief: Mapping[str, Any]
     return row
 
 
+def latest_design(session: Session, idea_id: uuid.UUID) -> Design | None:
+    """The newest design for an idea.
+
+    The API needs this when persisting a build: the design was written in an
+    earlier resume segment, so it is not in the delta the build arrives on.
+    """
+    return session.exec(
+        select(Design)
+        .where(Design.idea_id == idea_id)
+        .order_by(col(Design.created_at).desc())
+    ).first()
+
+
 def record_build(
     session: Session,
     idea_id: uuid.UUID,
     design_id: uuid.UUID,
     *,
+    build_id: uuid.UUID | None = None,
     html_path: str = "",
     tier0_pass: bool = False,
     summary: str = "",
     refurb_of: uuid.UUID | None = None,
     refurb_entry: RefurbEntry | None = None,
 ) -> Build:
-    """One DEVELOP run. Appends — it never replaces an earlier build for the idea."""
+    """One DEVELOP run. Appends — it never replaces an earlier build for the idea.
+
+    `build_id` is honoured when given, for the same reason `record_ideas` honours
+    an idea id: `develop_node` mints it *before* it writes anything, because the
+    build owns its output directory and later its URL (Q4/AD5). The row and the
+    files on disk have to agree.
+    """
     row = Build(
+        id=build_id or uuid.uuid4(),
         idea_id=idea_id,
         design_id=design_id,
         html_path=html_path,
@@ -364,3 +385,33 @@ def set_run_status(
     session.commit()
     session.refresh(run)
     return run
+
+
+def builds_for_run(session: Session, run: Run) -> list[Build]:
+    """Builds for this run's title, newest first.
+
+    Attributed by title, not by run — `ideas` carries no `run_id`, so two
+    concurrent runs for one title show each other's builds. Named in
+    REQUIREMENTS.md rather than fixed: the authoritative per-run view is the
+    interrupt payload.
+    """
+    return list(
+        session.exec(
+            select(Build)
+            .join(Idea, col(Idea.id) == col(Build.idea_id))
+            .where(Idea.title_id == run.title_id)
+            .order_by(col(Build.created_at).desc())
+        ).all()
+    )
+
+
+def deploys_for_run(session: Session, run: Run) -> list[Deploy]:
+    return list(
+        session.exec(
+            select(Deploy)
+            .join(Build, col(Build.id) == col(Deploy.build_id))
+            .join(Idea, col(Idea.id) == col(Build.idea_id))
+            .where(Idea.title_id == run.title_id)
+            .order_by(col(Deploy.created_at).desc())
+        ).all()
+    )

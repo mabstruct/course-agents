@@ -159,6 +159,9 @@ class RunStatus(str, Enum):
 
     RUNNING = "running"
     AWAITING_SELECTION = "awaiting_selection"
+    AWAITING_BUILD_APPROVAL = "awaiting_build_approval"
+    DEVELOPING = "developing"
+    DEPLOYING = "deploying"
     COMPLETED = "completed"
     FAILED = "failed"
 

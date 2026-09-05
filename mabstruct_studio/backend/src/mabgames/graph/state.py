@@ -11,7 +11,12 @@ unused fields in the first file anyone opens is the worse trade.
 import operator
 from typing import Annotated, TypedDict
 
-from mabgames.graph.models import GameDesignRecord, GameIdeaList
+from mabgames.graph.models import (
+    GameDeployRecord,
+    GameDesignRecord,
+    GameDevelopRecord,
+    GameIdeaList,
+)
 
 
 class GameStudioState(TypedDict):
@@ -20,8 +25,13 @@ class GameStudioState(TypedDict):
     game_title: str
     game_ideation: GameIdeaList | None
     chosen_idea_id: str | None
+    build_approved: bool | None
     # operator.add so parallel workers can append without clobbering (R7, later).
+    # Rough edge: replaying a node appends rather than replaces, so a resumed
+    # segment can leave a duplicate record here. The DB rows stay correct.
     game_designs: Annotated[list[GameDesignRecord], operator.add]
+    game_developments: Annotated[list[GameDevelopRecord], operator.add]
+    game_deployments: Annotated[list[GameDeployRecord], operator.add]
 
 
 def initial_state(game_title: str) -> GameStudioState:
@@ -29,5 +39,8 @@ def initial_state(game_title: str) -> GameStudioState:
         "game_title": game_title,
         "game_ideation": None,
         "chosen_idea_id": None,
+        "build_approved": None,
         "game_designs": [],
+        "game_developments": [],
+        "game_deployments": [],
     }
