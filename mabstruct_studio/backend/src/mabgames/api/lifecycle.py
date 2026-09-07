@@ -28,8 +28,19 @@ from langgraph.types import Command
 from sqlmodel import Session
 
 from mabgames.domain import repository as repo
-from mabgames.domain.models import Build, Deploy, Design, Idea, Run, RunStatus
+from mabgames.domain.models import (
+    Build,
+    Deploy,
+    Design,
+    Feedback,
+    Idea,
+    RefurbEntry,
+    Run,
+    RunStatus,
+    Title,
+)
 from mabgames.graph.approve_build import APPROVE_BUILD_INTERRUPT_KIND
+from mabgames.graph.models import GameDesignBrief, GameIdea
 from mabgames.graph.select_idea import SELECT_IDEA_INTERRUPT_KIND
 from mabgames.graph.studio import (
     APPROVE_BUILD_NODE,
@@ -51,6 +62,10 @@ class RunConflict(Exception):
 
 class UnknownIdea(Exception):
     """The chosen idea is not one this run offered."""
+
+
+class NothingToRefurb(Exception):
+    """A refurb needs feedback to act on; the build has none."""
 
 
 @dataclass
@@ -103,21 +118,32 @@ def _persist_build(session: Session, run: Run, delta: dict, result: "RunResult")
     """The build row takes the id the node minted before it wrote a single byte.
 
     `design_id` is not in this delta — the design was persisted in an earlier
-    resume segment — so it is looked up.
+    resume segment — so it is looked up. A refurb (R4) inherits the design of
+    the build it patches, by definition of a DEVELOP-entry refurb.
     """
     for record in delta["game_developments"]:
         idea_id = uuid.UUID(record.idea_id)
-        design = repo.latest_design(session, idea_id)
-        if design is None:
-            raise RunConflict(f"no design recorded for idea {idea_id}")
+        refurb_of = uuid.UUID(record.refurb_of) if record.refurb_of else None
+        if refurb_of is not None:
+            parent = session.get(Build, refurb_of)
+            if parent is None:
+                raise RunConflict(f"refurb names a build that does not exist: {refurb_of}")
+            design_id = parent.design_id
+        else:
+            design = repo.latest_design(session, idea_id)
+            if design is None:
+                raise RunConflict(f"no design recorded for idea {idea_id}")
+            design_id = design.id
         result.builds.append(repo.record_build(
             session,
             idea_id,
-            design.id,
+            design_id,
             build_id=uuid.UUID(record.build_id),
             html_path=record.html_path,
             tier0_pass=record.tier0_pass,
             summary=record.summary,
+            refurb_of=refurb_of,
+            refurb_entry=RefurbEntry.DEVELOP if refurb_of else None,
         ))
 
 
@@ -300,6 +326,73 @@ def approve_build_detached(session_factory, graph, run_id: uuid.UUID) -> None:
             approve_build(session, graph, run, True)
         except Exception:
             logger.exception("background build failed for run %s", run_id)
+
+
+# --------------------------------------------------------------------------- #
+# R4 — refurbish a build from its feedback, re-entering at DEVELOP
+# --------------------------------------------------------------------------- #
+
+
+def _feedback_line(row: Feedback) -> str:
+    rating = f"[rated {row.rating}/5] " if row.rating is not None else ""
+    return f"{rating}{row.comment}".strip() or "(rating only)"
+
+
+def create_refurb_run(session: Session, build: Build) -> Run:
+    """Reserve the run in the request, so the caller has an id to poll.
+
+    Refuses a build with no feedback: there is nothing to feed back. The run is
+    born `developing` because the very first node is DEVELOP.
+    """
+    if not repo.feedback_for_build(session, build.id):
+        raise NothingToRefurb(f"build {build.id} has no feedback to refurbish from")
+    idea = session.get(Idea, build.idea_id)
+    run = repo.create_run(session, idea.title_id)
+    return repo.set_run_status(session, run, RunStatus.DEVELOPING)
+
+
+def refurb_build(session: Session, graph, run: Run, build: Build) -> RunResult:
+    """R4 DEVELOP-patch: same idea, same brief, plus what players said.
+
+    The only place the app hand-assembles graph state from domain rows — the
+    thing the notebook did by hand for every phase. Here it is legitimate: a
+    refurb *is* a re-entry, and the rows are the record of where it re-enters.
+    """
+    from mabgames.graph.state import refurb_state
+
+    idea = session.get(Idea, build.idea_id)
+    design = session.get(Design, build.design_id)
+    title = session.get(Title, idea.title_id)
+    state = refurb_state(
+        title.title,
+        GameIdea(
+            idea_id=str(idea.id),
+            sub_title=idea.sub_title,
+            genre=idea.genre,
+            style=idea.style,
+            reason=idea.reason,
+            description=idea.description,
+            features=list(idea.features),
+        ),
+        GameDesignBrief(**design.brief),
+        refurb_of=str(build.id),
+        feedback=[_feedback_line(row) for row in repo.feedback_for_build(session, build.id)],
+    )
+    stream = graph.stream(state, thread_config(run.id), stream_mode="updates")
+    return _drive(session, graph, run, stream)
+
+
+def refurb_build_detached(session_factory, graph, run_id: uuid.UUID, build_id: uuid.UUID) -> None:
+    """Background entry point; the same shape as `approve_build_detached`."""
+    with session_factory() as session:
+        run = repo.get_run(session, run_id)
+        build = session.get(Build, build_id)
+        if run is None or build is None:
+            return
+        try:
+            refurb_build(session, graph, run, build)
+        except Exception:
+            logger.exception("background refurb failed for run %s", run_id)
 
 
 def ideas_for_run(session: Session, run: Run) -> list[tuple[Idea, Any]]:

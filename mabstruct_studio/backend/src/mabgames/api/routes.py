@@ -15,6 +15,8 @@ from mabgames.api.schemas import (
     BuildOut,
     DeployOut,
     DesignOut,
+    FeedbackIn,
+    FeedbackOut,
     IdeaOut,
     RankedBuildOut,
     RunOut,
@@ -57,6 +59,8 @@ def _build_out(build: Build) -> BuildOut:
         html_path=build.html_path,
         tier0_pass=build.tier0_pass,
         summary=build.summary,
+        refurb_of=build.refurb_of,
+        refurb_entry=build.refurb_entry,
         created_at=build.created_at,
     )
 
@@ -184,13 +188,81 @@ def approve_build(
     return _run_out(run, lifecycle.pending_interrupt(graph, run.id))
 
 
-@router.get("/builds/{build_id}", response_model=BuildOut)
-def get_build(build_id: uuid.UUID, session: SessionDep) -> BuildOut:
-    """One build: where it was written and whether Tier-0 passed."""
+def _require_build(session, build_id: uuid.UUID) -> Build:
     build = session.get(Build, build_id)
     if build is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no build {build_id}")
-    return _build_out(build)
+    return build
+
+
+def _feedback_out(row) -> FeedbackOut:
+    return FeedbackOut(
+        id=row.id,
+        build_id=row.build_id,
+        rating=row.rating,
+        comment=row.comment,
+        created_at=row.created_at,
+    )
+
+
+@router.get("/builds/{build_id}", response_model=BuildOut)
+def get_build(build_id: uuid.UUID, session: SessionDep) -> BuildOut:
+    """One build: where it was written, whether Tier-0 passed, what it patches."""
+    return _build_out(_require_build(session, build_id))
+
+
+@router.get("/builds/{build_id}/lineage", response_model=list[BuildOut])
+def build_lineage(build_id: uuid.UUID, session: SessionDep) -> list[BuildOut]:
+    """R4 — this build and every build it refurbishes, newest first."""
+    build = _require_build(session, build_id)
+    return [_build_out(b) for b in repo.build_lineage(session, build)]
+
+
+@router.post(
+    "/builds/{build_id}/feedback",
+    response_model=FeedbackOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def give_feedback(build_id: uuid.UUID, body: FeedbackIn, session: SessionDep) -> FeedbackOut:
+    """R4 — feedback against one specific build, which stays playable (Q4).
+
+    A rating moves the leaderboard (R7); a comment is what a refurb reads.
+    """
+    build = _require_build(session, build_id)
+    row = repo.record_feedback(session, build.id, rating=body.rating, comment=body.comment)
+    return _feedback_out(row)
+
+
+@router.get("/builds/{build_id}/feedback", response_model=list[FeedbackOut])
+def list_feedback(build_id: uuid.UUID, session: SessionDep) -> list[FeedbackOut]:
+    build = _require_build(session, build_id)
+    return [_feedback_out(row) for row in repo.feedback_for_build(session, build.id)]
+
+
+@router.post("/builds/{build_id}/refurb", response_model=RunOut, status_code=status.HTTP_202_ACCEPTED)
+def refurb_build(
+    build_id: uuid.UUID,
+    session: SessionDep,
+    graph: GraphDep,
+    session_factory: SessionFactoryDep,
+    run_task: TaskRunnerDep,
+) -> RunOut:
+    """R4 — patch this build from its feedback: same brief, new build, new URL.
+
+    Re-enters at DEVELOP (Q3's first loop), so no idea choice and no build gate:
+    asking for the refurb *is* the approval. Returns `202` with a new run to
+    poll, exactly like approving a build. 409 if the build has no feedback.
+    """
+    build = _require_build(session, build_id)
+    try:
+        run = lifecycle.create_refurb_run(session, build)
+    except lifecycle.NothingToRefurb as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+    run_id = run.id
+    run_task(lambda: lifecycle.refurb_build_detached(session_factory, graph, run_id, build.id))
+    session.refresh(run)
+    return _run_out(run, lifecycle.pending_interrupt(graph, run.id))
 
 
 @router.get("/titles", response_model=list[TitleOut])

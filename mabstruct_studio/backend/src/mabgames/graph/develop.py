@@ -24,7 +24,7 @@ from mabgames.graph.agents import DEVELOP_RECURSION_LIMIT
 from mabgames.graph.messages import message_text, tool_names_from_messages
 from mabgames.graph.models import GameDevelopRecord
 from mabgames.graph.paths import build_html_path
-from mabgames.graph.prompts import DEVELOP_HUMAN_PROMPT
+from mabgames.graph.prompts import DEVELOP_HUMAN_PROMPT, DEVELOP_REFURB_PROMPT
 from mabgames.graph.state import GameStudioState
 from mabgames.graph.tools.html_writer import make_dev_tools
 from mabgames.graph.validation import run_static_validation
@@ -88,6 +88,16 @@ def make_develop_node(
             game_art=brief.game_art,
             hints_for_the_team=brief.hints_for_the_team,
         )
+        # R4 — a refurb is the same build instruction plus what players said.
+        # The previous build's HTML is deliberately not handed over: a patch
+        # from the brief plus feedback is the cheap, simple loop Q3 chose first.
+        refurb_of = state.get("refurb_of")
+        if refurb_of:
+            instruction += DEVELOP_REFURB_PROMPT.format(
+                REFURB_OF=refurb_of,
+                feedback="\n".join(f"- {line}" for line in state.get("refurb_feedback", []))
+                or "- (no comments were recorded)",
+            )
         agent_config = {"recursion_limit": DEVELOP_RECURSION_LIMIT}
 
         def _run(messages):
@@ -136,6 +146,7 @@ def make_develop_node(
                     html_path=str(html_path.resolve()),
                     tier0_pass=validation["pass"],
                     summary=summary,
+                    refurb_of=refurb_of or None,
                 )
             ]
         }

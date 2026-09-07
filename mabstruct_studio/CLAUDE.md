@@ -23,13 +23,16 @@ and wrap it in the three things the notebook cannot do —
 
 **Status: the whole pipeline runs in the app** — `IDEATION → SELECT → DESIGN → APPROVE →
 DEVELOP → DEPLOY`, in one graph, persisted, with two human decision points. A title becomes a
-playable game at a live here.now URL. Proven end to end. R1, R2, R3, R6 delivered. **R7's
-read side is exposed**: `GET /api/titles/{id}/leaderboard` and `.../candidate` compute
-live from `repository.leaderboard` / `production_candidate`; the `candidates` cache table
-stays unpopulated until the start page needs it. **R4 (feedback/refurb) is the next slice** —
-`repository.record_feedback` is tested but has no route, so nothing can rate a build over
-HTTP yet, and `builds.refurb_of` is still unused. Everything below *The reference
-implementation* describes the notebook — the thing being ported *from*, not the target.
+playable game at a live here.now URL. Proven end to end. R1, R2, R3, R4, R6, R7 delivered
+over HTTP. **R7**: `GET /api/titles/{id}/leaderboard` and `.../candidate` compute live from
+`repository.leaderboard` / `production_candidate`; the `candidates` cache table stays
+unpopulated until the start page needs it. **R4**: `POST /api/builds/{id}/feedback` rates
+and comments; `POST /api/builds/{id}/refurb` starts a new run that enters the graph at
+DEVELOP with the same brief plus the feedback (`refurb_state` + the `_entry` router in
+`graph/studio.py`), recording `refurb_of` / `refurb_entry=develop`. The DESIGN re-entry
+(Q3's second loop) is not built. **R5 stays deferred.** Next: the frontend (AD4) and the
+owned-subdomain start page (AD5). Everything below *The reference implementation* describes
+the notebook — the thing being ported *from*, not the target.
 
 ### Where application code goes
 

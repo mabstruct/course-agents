@@ -8,6 +8,9 @@ accessors; both nodes now select by `chosen_idea_id`, never by index.
 
 Two human decision points: SELECT (R2) chooses the idea, APPROVE gates the
 expensive build.
+
+One extra entry (R4): a refurb run starts at DEVELOP with `refurb_state`, so the
+same DEVELOP -> DEPLOY tail serves both a first build and a patch of it.
 """
 
 import sqlite3
@@ -77,6 +80,11 @@ def make_checkpointer(path: Path | str) -> SqliteSaver:
     )
 
 
+def _entry(state: GameStudioState) -> str:
+    """A refurb (R4) skips straight to DEVELOP; everything else ideates."""
+    return DEVELOP_NODE if state.get("refurb_of") else IDEATION_NODE
+
+
 def _build_gate(state: GameStudioState) -> str:
     """A rejected brief ends the run without a build. The idea stays `designed`."""
     return DEVELOP_NODE if state.get("build_approved") else END
@@ -124,7 +132,7 @@ def build_studio_graph(
         ),
     )
 
-    builder.add_edge(START, IDEATION_NODE)
+    builder.add_conditional_edges(START, _entry, [IDEATION_NODE, DEVELOP_NODE])
     builder.add_edge(IDEATION_NODE, SELECT_IDEA_NODE)
     builder.add_edge(SELECT_IDEA_NODE, DESIGN_NODE)
     builder.add_edge(DESIGN_NODE, APPROVE_BUILD_NODE)

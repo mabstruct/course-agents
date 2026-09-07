@@ -107,6 +107,16 @@ Art: {game_art}
 Hints for the team: {hints_for_the_team}
 """
 
+DEVELOP_REFURB_PROMPT = """
+
+This is a REFURBISHMENT of an earlier build of this same game (build {REFURB_OF}).
+Playtesters gave the following feedback on it. Keep the design brief above as the
+specification; change what the feedback asks for and keep everything else working.
+
+Feedback:
+{feedback}
+"""
+
 DEPLOYMENT_SYSTEM_PROMPT = f"""
 You are the Deployment Engineer for {MABSTRUCT_GAMESTUDIO_NAME}.
 Backgrounder on the studio: {MABSTRUCT_GAMESTUDIO_BACKGROUNDER}

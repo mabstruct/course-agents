@@ -72,6 +72,9 @@ class GameDevelopRecord(BaseModel):
     html_path: str = Field(description="Path to the written index.html")
     tier0_pass: bool = Field(description="Whether static Tier-0 validation passed")
     summary: str = Field(description="Developer confirmation: MVP vs deferred, validation notes")
+    # R4 — the build this one patches, if any. Copied from state by develop_node
+    # so the persister can record lineage without reading graph state.
+    refurb_of: str | None = Field(default=None, description="build_id being refurbished, if any")
 
 
 class GameDeployRecord(BaseModel):

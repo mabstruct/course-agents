@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from mabgames.domain.models import IdeaStatus, RunStatus
+from mabgames.domain.models import IdeaStatus, RefurbEntry, RunStatus
 
 
 class TitleOut(BaseModel):
@@ -71,6 +71,9 @@ class BuildOut(BaseModel):
     html_path: str
     tier0_pass: bool
     summary: str
+    # R4 lineage: the build this one patches, and where it re-entered.
+    refurb_of: uuid.UUID | None = None
+    refurb_entry: RefurbEntry | None = None
     created_at: datetime
 
 
@@ -113,3 +116,16 @@ class SelectIdeaIn(BaseModel):
 
 class ApproveBuildIn(BaseModel):
     approved: bool = True
+
+
+class FeedbackIn(BaseModel):
+    """R4 — a rating, a comment, or both. The rating is R7's only ranking signal."""
+
+    rating: int | None = Field(default=None, ge=1, le=5)
+    comment: str = ""
+
+
+class FeedbackOut(FeedbackIn):
+    id: uuid.UUID
+    build_id: uuid.UUID
+    created_at: datetime

@@ -196,6 +196,17 @@ def record_feedback(
     return row
 
 
+def feedback_for_build(session: Session, build_id: uuid.UUID) -> list[Feedback]:
+    """Everything said about one build, oldest first — the order a refurb reads it."""
+    return list(
+        session.exec(
+            select(Feedback)
+            .where(Feedback.build_id == build_id)
+            .order_by(col(Feedback.created_at))
+        ).all()
+    )
+
+
 # --------------------------------------------------------------------------- #
 # R3 — status, derived from which stage rows exist
 # --------------------------------------------------------------------------- #
