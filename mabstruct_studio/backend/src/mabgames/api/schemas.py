@@ -84,6 +84,14 @@ class DeployOut(BaseModel):
     created_at: datetime
 
 
+class RankedBuildOut(BuildOut):
+    """One leaderboard row (R7): a build, its mean rating, and where to play it."""
+
+    score: float | None = None
+    ratings: int = 0
+    site_url: str | None = None
+
+
 class RunOut(RunSummary):
     # Present exactly when the run is paused. Taken from the interrupt payload —
     # not a DB query — so it is authoritative for what *this run* offered.

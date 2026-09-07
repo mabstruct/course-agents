@@ -16,6 +16,7 @@ from mabgames.api.schemas import (
     DeployOut,
     DesignOut,
     IdeaOut,
+    RankedBuildOut,
     RunOut,
     RunSummary,
     SelectIdeaIn,
@@ -23,7 +24,7 @@ from mabgames.api.schemas import (
     TitleOut,
 )
 from mabgames.domain import repository as repo
-from mabgames.domain.models import Build, Deploy, Design, Run, RunStatus
+from mabgames.domain.models import Build, Deploy, Design, Run, RunStatus, Title
 
 router = APIRouter()
 
@@ -217,3 +218,53 @@ def list_ideas(title_id: uuid.UUID, session: SessionDep) -> list[IdeaOut]:
         )
         for idea, idea_status in repo.ideas_for_title(session, title_id)
     ]
+
+
+def _require_title(session, title_id: uuid.UUID) -> Title:
+    title = session.get(Title, title_id)
+    if title is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no title {title_id}")
+    return title
+
+
+def _ranked_out(session, build: Build, score: float | None) -> RankedBuildOut:
+    deploy = repo.live_deploy(session, build.id)
+    return RankedBuildOut(
+        **_build_out(build).model_dump(),
+        score=score,
+        ratings=repo.rating_count(session, build.id),
+        site_url=deploy.site_url if deploy is not None else None,
+    )
+
+
+@router.get("/titles/{title_id}/leaderboard", response_model=list[RankedBuildOut])
+def leaderboard(title_id: uuid.UUID, session: SessionDep) -> list[RankedBuildOut]:
+    """Every build for a title, best-rated first (R7).
+
+    Ranked on the mean human rating and nothing else (Q1). Unrated builds come
+    last, newest first, with no score. Tier-0 is shown but never ranks.
+    """
+    _require_title(session, title_id)
+    return [
+        _ranked_out(session, build, score)
+        for build, score in repo.leaderboard(session, title_id)
+    ]
+
+
+@router.get("/titles/{title_id}/candidate", response_model=RankedBuildOut)
+def production_candidate(title_id: uuid.UUID, session: SessionDep) -> RankedBuildOut:
+    """The one production candidate for a title (R7), or 404 if it has none yet.
+
+    Computed live, not read from the `candidates` cache: that cache is for the
+    start page that lists every title at once, and nothing populates it yet.
+    """
+    _require_title(session, title_id)
+    build = repo.production_candidate(session, title_id)
+    if build is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"title {title_id} has no candidate yet"
+        )
+    score = next(
+        (s for b, s in repo.leaderboard(session, title_id) if b.id == build.id), None
+    )
+    return _ranked_out(session, build, score)

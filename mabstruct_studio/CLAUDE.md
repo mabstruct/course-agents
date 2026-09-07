@@ -23,11 +23,13 @@ and wrap it in the three things the notebook cannot do —
 
 **Status: the whole pipeline runs in the app** — `IDEATION → SELECT → DESIGN → APPROVE →
 DEVELOP → DEPLOY`, in one graph, persisted, with two human decision points. A title becomes a
-playable game at a live here.now URL. Proven end to end. R1, R2, R3, R6 delivered; **R4
-(feedback/refurb) and R7 (leaderboard) are the next slice** — `repository.leaderboard` and
-`production_candidate` are written and tested but not yet exposed over HTTP, and
-`builds.refurb_of` is still unused. Everything below *The reference implementation* describes
-the notebook — the thing being ported *from*, not the target.
+playable game at a live here.now URL. Proven end to end. R1, R2, R3, R6 delivered. **R7's
+read side is exposed**: `GET /api/titles/{id}/leaderboard` and `.../candidate` compute
+live from `repository.leaderboard` / `production_candidate`; the `candidates` cache table
+stays unpopulated until the start page needs it. **R4 (feedback/refurb) is the next slice** —
+`repository.record_feedback` is tested but has no route, so nothing can rate a build over
+HTTP yet, and `builds.refurb_of` is still unused. Everything below *The reference
+implementation* describes the notebook — the thing being ported *from*, not the target.
 
 ### Where application code goes
 

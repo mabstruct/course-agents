@@ -279,6 +279,25 @@ def leaderboard(
     return scored
 
 
+def rating_count(session: Session, build_id: uuid.UUID) -> int:
+    """How many ratings a mean is built on — "5.0 from 1" reads differently from 12."""
+    return session.exec(
+        select(func.count(col(Feedback.id)))
+        .where(Feedback.build_id == build_id)
+        .where(col(Feedback.rating).is_not(None))
+    ).one()
+
+
+def live_deploy(session: Session, build_id: uuid.UUID) -> Deploy | None:
+    """The newest successful deploy of a build — the URL a leaderboard row links to."""
+    return session.exec(
+        select(Deploy)
+        .where(Deploy.build_id == build_id)
+        .where(Deploy.deployed == True)  # noqa: E712
+        .order_by(col(Deploy.created_at).desc())
+    ).first()
+
+
 def production_candidate(session: Session, title_id: uuid.UUID) -> Build | None:
     """R7 — exactly one candidate per title, or None if the title has no builds.
 
