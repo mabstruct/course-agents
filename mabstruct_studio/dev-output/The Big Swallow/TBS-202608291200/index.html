@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>THE BIG SWALLOW — Eat the Horizon Before It Eats You</title>
+<style>
+  html,body{margin:0;padding:0;background:#04040a;overflow:hidden;height:100%;
+    font-family:"Trebuchet MS",system-ui,sans-serif;color:#dfe9ff;user-select:none;}
+  #wrap{position:fixed;inset:0;}
+  canvas{display:block;width:100%;height:100%;cursor:crosshair;}
+  .ui{position:absolute;pointer-events:none;text-shadow:0 0 8px #000;}
+  #hud{left:14px;top:12px;font-size:14px;letter-spacing:1px;line-height:1.5em;}
+  #chain{position:absolute;left:50%;top:14px;transform:translateX(-50%);font-size:20px;
+    letter-spacing:3px;opacity:0;transition:opacity .2s;}
+  #warn{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);font-size:15px;
+    letter-spacing:2px;color:#ffb0c8;opacity:0;}
+  #overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    flex-direction:column;background:rgba(3,3,10,.82);text-align:center;}
+  #overlay h1{font-size:40px;letter-spacing:8px;margin:0 0 6px;font-weight:400;
+    color:#fff;text-shadow:0 0 26px #6cf}
+  #overlay p{max-width:640px;font-size:15px;line-height:1.6em;color:#9fb2d8;margin:6px 20px}
+  .cards{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;margin-top:18px;}
+  .card{width:210px;padding:14px;border:1px solid #2b3f6a;background:rgba(12,18,36,.9);
+    border-radius:10px;cursor:pointer;transition:.15s;}
+  .card:hover{border-color:#7fe3ff;transform:translateY(-4px);box-shadow:0 0 24px #1a5f8a}
+  .card b{display:block;font-size:16px;color:#7fe3ff;letter-spacing:2px;margin-bottom:6px}
+  .card span{font-size:13px;color:#9fb2d8;line-height:1.4em}
+  #btn{margin-top:22px;padding:12px 30px;border:1px solid #7fe3ff;border-radius:8px;
+    background:rgba(20,40,70,.7);color:#eaf6ff;letter-spacing:3px;font-size:16px;cursor:pointer}
+  #btn:hover{background:#1a5f8a}
+  .hide{display:none!important}
+  #bar{position:absolute;left:14px;top:96px;width:190px;height:9px;border:1px solid #40507a;border-radius:5px;overflow:hidden}
+  #barf{height:100%;width:100%;background:linear-gradient(90deg,#ff5d7a,#ffd36c)}
+  #eb{position:absolute;left:14px;top:112px;width:190px;height:6px;border:1px solid #2c4a66;border-radius:4px;overflow:hidden}
+  #ebf{height:100%;width:0%;background:linear-gradient(90deg,#4be0ff,#b98cff)}
+  small{color:#6f7fa6}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="cv"></canvas>
+  <div class="ui" id="hud"></div>
+  <div id="bar"><div id="barf"></div></div>
+  <div id="eb"><div id="ebf"></div></div>
+  <div class="ui" id="chain"></div>
+  <div class="ui" id="warn"></div>
+  <div id="overlay"></div>
+</div>
+<script>
+'use strict';
+/* ================= THE BIG SWALLOW — MABSTRUCT GAMESTUDIO ================= */
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const hud = document.getElementById('hud'), overlay = document.getElementById('overlay');
+const chainEl = document.getElementById('chain'), warnEl = document.getElementById('warn');
+const barf = document.getElementById('barf'), ebf = document.getElementById('ebf');
+let W = 0, H = 0, DPR = 1;
+function resize(){
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = Math.floor(W * DPR); cv.height = Math.floor(H * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener('resize', resize); resize();
+
+const TAU = Math.PI * 2, rnd = (a, b) => a + Math.random() * (b - a);
+const rint = (a, b) => Math.floor(rnd(a, b + 1));
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp = (a, b, t) => a + (b - a) * t;
+const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+
+/* ---------------- audio ---------------- */
+let AC = null, master = null;
+function audioInit(){
+  if (AC) return;
+  try{
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    master = AC.createGain(); master.gain.value = 0.35; master.connect(AC.destination);
+    // eternal drone
+    const d = AC.createOscillator(), dg = AC.createGain(), d2 = AC.createOscillator();
+    d.type = 'sine'; d.frequency.value = 41; d2.type = 'triangle'; d2.frequency.value = 61.5;
+    dg.gain.value = 0.16; d.connect(dg); d2.connect(dg); dg.connect(master);
+    d.start(); d2.start(); droneG = dg; droneO = d;
+  }catch(e){ AC = null; }
+}
+let droneG = null, droneO = null;
+function tone(f, dur, type, vol, slide){
+  if (!AC) return;
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = type || 'sine'; o.frequency.setValueAtTime(f, AC.currentTime);
+  if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(20, slide), AC.currentTime + dur);
+  g.gain.setValueAtTime(0.0001, AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(vol || 0.2, AC.currentTime + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + dur);
+  o.connect(g); g.connect(master); o.start(); o.stop(AC.currentTime + dur + 0.02);
+}
+function noise(dur, vol, lp){
+  if (!AC) return;
+  const n = AC.createBufferSource(), len = Math.floor(AC.sampleRate * dur);
+  const buf = AC.createBuffer(1, len, AC.sampleRate), dta = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) dta[i] = (Math.random() * 2 - 1) * (1 - i / len);
+  n.buffer = buf;
+  const f = AC.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = lp || 900;
+  const g = AC.createGain(); g.gain.value = vol || 0.2;
+  n.connect(f); f.connect(g); g.connect(master); n.start();
+}
+const SFX = {
+  bite(size){ tone(180 + 260 / size, 0.16, 'sine', 0.3, 60 + 90 / size); noise(0.12, 0.16, 1400); },
+  gulp(){ tone(90, 0.5, 'sine', 0.35, 34); noise(0.35, 0.2, 400); },
+  hurt(){ noise(0.35, 0.4, 320); tone(120, 0.3, 'sawtooth', 0.2, 48); },
+  charge(){ tone(300, 0.1, 'triangle', 0.08, 520); },
+  lunge(){ noise(0.2, 0.22, 2200); tone(420, 0.18, 'triangle', 0.14, 140); },
+  chain(n){ tone(330 * Math.pow(1.0595, (n % 12) * 2), 0.22, 'triangle', 0.16); },
+  mutate(){ [220, 330, 440, 660].forEach((f, i) => setTimeout(() => tone(f, 0.5, 'sine', 0.16), i * 90)); },
+  win(){ [110, 165, 220, 330, 440].forEach((f, i) => setTimeout(() => tone(f, 1.2, 'sine', 0.2), i * 150)); }
+};
+
+/* ---------------- content tables ---------------- */
+// shape: marker glyph doubles as colour-blind-safe threat cue
+const SPECIES = {
+  pebble:   { col:'#9fd8ff', name:'Pebble Planet',  mass:1.0, mark:'o', danger:0, speed:22 },
+  comet:    { col:'#ffd36c', name:'Comet',          mass:1.6, mark:'>', danger:0, speed:110 },
+  satellite:{ col:'#b6c4d6', name:'Satellite',      mass:2.4, mark:'#', danger:1, speed:40 },
+  nebula:   { col:'#b98cff', name:'Nebula Organism',mass:1.2, mark:'~', danger:0, speed:14 },
+  spore:    { col:'#67ffc0', name:'Singularity Spore',mass:2.0,mark:'*', danger:0, speed:70 },
+  thorn:    { col:'#ff5d7a', name:'Thorn Asteroid', mass:2.2, mark:'X', danger:2, speed:34 },
+  moon:     { col:'#eaf6ff', name:'Living Moon',    mass:9.0, mark:'@', danger:2, speed:26 }
+};
+const MUTATIONS = [
+  { id:'ice',  n:'GLACIAL DRIFT',  d:'Icy bodies smooth your inertia: +45% steering grip, lunges cost less speed.', f:p=>{p.grip*=1.45;} },
+  { id:'fang', n:'COMET FANGS',    d:'Ring of burning teeth: you may swallow prey up to 1.15x your own radius.', f:p=>{p.eatRatio+=0.35;} },
+  { id:'mag',  n:'MAGNETIC SALIVA',d:'Metallic pull: prey smaller than you drifts into your maw from afar.', f:p=>{p.magnet+=460;} },
+  { id:'shld', n:'NEBULA SHIELD',  d:'A living membrane absorbs the next 3 impacts and regrows over time.', f:p=>{p.shieldMax+=3;p.shield=p.shieldMax;} },
+  { id:'worm', n:'WORMHOLE GUT',   d:'Your stomach folds space: lunges teleport you through the first blocker.', f:p=>{p.worm=true;} },
+  { id:'gut',  n:'IRON GUT',       d:'Thorns and armour no longer wound you — they only slow the swallow.', f:p=>{p.ironGut=true;} },
+  { id:'chn',  n:'FEAST FRENZY',   d:'Feast Chain lasts 2s longer and each link adds more mass.', f:p=>{p.chainTime+=2;p.chainGain+=0.12;} },
+  { id:'thr',  n:'VACUUM THRUST',  d:'Charged lunges launch 40% harder and briefly ignore drag.', f:p=>{p.lungePow*=1.4;} },
+  { id:'dig',  n:'DEEP DIGESTION', d:'Every meal yields +35% mass and slowly regenerates health.', f:p=>{p.digest+=0.35;p.regen+=0.55;} }
+];
+
+const S = {}; // game state
+function newBody(kind, x, y, r){
+  const sp = SPECIES[kind];
+  const a = rnd(0, TAU), v = sp.speed * rnd(0.5, 1.3);
+  return { kind, sp, x, y, r, vx:Math.cos(a)*v, vy:Math.sin(a)*v, ang:rnd(0,TAU),
+    spin:rnd(-1.6,1.6), hp: kind==='moon'?3:1, pulse:rnd(0,TAU), alive:true };
+}
+function spawnWave(n){
+  for (let i = 0; i < n; i++) spawnOne();
+}
+function spawnOne(near){
+  const R = S.collapseR * rnd(0.25, 0.94), a = rnd(0, TAU);
+  const x = Math.cos(a) * R, y = Math.sin(a) * R;
+  const t = S.time, pr = S.player.r;
+  let kinds = ['pebble','pebble','comet','nebula'];
+  if (t > 25) kinds.push('satellite','thorn','spore');
+  if (t > 70) kinds.push('thorn','satellite','spore','comet');
+  if (t > 110 && Math.random() < 0.13) kinds.push('moon');
+  const k = pick(kinds);
+  let r;
+  if (k === 'moon') r = pr * rnd(1.5, 2.4) + 30;
+  else if (k === 'nebula') r = pr * rnd(0.5, 1.5) + 8;
+  else r = pr * rnd(0.28, 1.25) + rnd(4, 9);
+  r = clamp(r, 5, 340);
+  S.bodies.push(newBody(k, x, y, r));
+}
+function resetGame(){
+  S.time = 0; S.score = 0; S.bodies = []; S.parts = []; S.pops = [];
+  S.collapseR = 2100; S.shake = 0; S.flash = 0; S.mutQueue = 0; S.paused = false;
+  S.over = null; S.horizon = false; S.horizonHP = 5; S.horizonPhase = 0;
+  S.mutTaken = []; S.nextMutMass = 6; S.stars = [];
+  for (let i = 0; i < 420; i++) S.stars.push({ x:rnd(-2600,2600), y:rnd(-2600,2600), z:rnd(0.25,1), s:rnd(0.5,1.9) });
+  S.player = { x:0, y:0, vx:0, vy:0, mass:1, r:16, hp:100, maxhp:100, open:0, ang:0,
+    charge:0, charging:false, lungeT:0, iframe:0, chain:0, chainT:0,
+    grip:1, eatRatio:0.86, magnet:0, shield:0, shieldMax:0, worm:false, ironGut:false,
+    chainTime:3.2, chainGain:0.10, lungePow:1, digest:1, regen:0, warpT:0 };
+  spawnWave(26);
+}
+
+/* ---------------- input ---------------- */
+const IN = { mx: W/2, my: H/2, down:false, keys:{}, useKeys:false };
+cv.addEventListener('mousemove', e => { IN.mx = e.clientX; IN.my = e.clientY; IN.useKeys = false; });
+cv.addEventListener('mousedown', e => { audioInit(); IN.down = true; });
+window.addEventListener('mouseup', () => { IN.down = false; });
+cv.addEventListener('touchstart', e => { audioInit(); IN.down = true;
+  const t = e.touches[0]; IN.mx = t.clientX; IN.my = t.clientY; IN.useKeys = false; e.preventDefault(); }, {passive:false});
+cv.addEventListener('touchmove', e => { const t = e.touches[0]; IN.mx = t.clientX; IN.my = t.clientY; e.preventDefault(); }, {passive:false});
+cv.addEventListener('touchend', e => { IN.down = false; e.preventDefault(); }, {passive:false});
+window.addEventListener('keydown', e => {
+  audioInit(); IN.keys[e.code] = true;
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].indexOf(e.code) >= 0) e.preventDefault();
+  if (e.code === 'Space') { IN.down = true; IN.useKeys = true; }
+  if (/^(KeyW|KeyA|KeyS|KeyD|Arrow)/.test(e.code)) IN.useKeys = true;
+});
+window.addEventListener('keyup', e => { IN.keys[e.code] = false; if (e.code === 'Space') IN.down = false; });
+
+/* ---------------- camera / helpers ---------------- */
+const cam = { x:0, y:0, s:1 };
+function camScale(){ return clamp(62 / (S.player.r + 46), 0.3, 1.05); }
+function worldCursor(){
+  if (IN.useKeys){
+    const k = IN.keys; let dx = 0, dy = 0;
+    if (k.KeyA || k.ArrowLeft) dx -= 1; if (k.KeyD || k.ArrowRight) dx += 1;
+    if (k.KeyW || k.ArrowUp) dy -= 1; if (k.KeyS || k.ArrowDown) dy += 1;
+    const L = Math.hypot(dx, dy) || 1;
+    return { x: S.player.x + dx / L * 260, y: S.player.y + dy / L * 260, on: dx || dy };
+  }
+  return { x: (IN.mx - W/2)/cam.s + cam.x, y: (IN.my - H/2)/cam.s + cam.y, on:1 };
+}
+function burst(x, y, n, col, spd, life){
+  for (let i = 0; i < n; i++){
+    const a = rnd(0, TAU), v = rnd(0.2, 1) * spd;
+    S.parts.push({ x, y, vx:Math.cos(a)*v, vy:Math.sin(a)*v, t:0, life:life||0.7, col, r:rnd(1.5,4) });
+  }
+}
+function pop(x, y, txt, col){ S.pops.push({ x, y, txt, col:col||'#fff', t:0 }); }
+
+/* ---------------- update ---------------- */
+function update(dt, S){
+  if (S.paused || S.over) return;
+  const p = S.player;
+  S.time += dt;
+  p.r = 16 * Math.pow(p.mass, 0.42);
+  p.iframe = Math.max(0, p.iframe - dt);
+  p.lungeT = Math.max(0, p.lungeT - dt);
+  p.warpT = Math.max(0, p.warpT - dt);
+  S.shake = Math.max(0, S.shake - dt * 3.5);
+  S.flash = Math.max(0, S.flash - dt * 2.4);
+
+  /* steering: cursor sets a gravitational anchor, we orbit it */
+  const c = worldCursor();
+  let dx = c.x - p.x, dy = c.y - p.y, d = Math.hypot(dx, dy) || 1;
+  if (c.on){
+    const nx = dx / d, ny = dy / d;
+    const pull = clamp(d * 3.4, 0, 900) * p.grip;
+    p.vx += nx * pull * dt; p.vy += ny * pull * dt;
+    // tangential swirl -> orbital feel
+    const swirl = clamp(520 - d * 0.5, 0, 520) * p.grip * 0.55;
+    p.vx += -ny * swirl * dt; p.vy += nx * swirl * dt;
+    p.ang = Math.atan2(ny, nx);
+  }
+  // charge & lunge
+  if (IN.down){
+    if (!p.charging){ p.charging = true; SFX.charge(); }
+    p.charge = Math.min(1, p.charge + dt / 0.75);
+    p.vx *= Math.pow(0.25, dt); p.vy *= Math.pow(0.25, dt); // brace
+  } else if (p.charging){
+    p.charging = false;
+    const power = (300 + 900 * p.charge) * p.lungePow / Math.pow(p.mass, 0.16);
+    p.vx += Math.cos(p.ang) * power; p.vy += Math.sin(p.ang) * power;
+    p.lungeT = 0.34 + 0.2 * p.charge; p.open = 1;
+    if (p.charge > 0.25) SFX.lunge();
+    burst(p.x - Math.cos(p.ang)*p.r, p.y - Math.sin(p.ang)*p.r, 14, '#7fe3ff', 180, 0.5);
+    p.charge = 0;
+  }
+  const drag = (p.lungeT > 0 ? 0.55 : 1.15) / (1 + p.mass * 0.004);
+  p.vx *= Math.pow(0.5, dt * drag * 2); p.vy *= Math.pow(0.5, dt * drag * 2);
+  p.x += p.vx * dt; p.y += p.vy * dt;
+  p.open = Math.max(0, p.open - dt * 2.2);
+  if (p.regen) p.hp = Math.min(p.maxhp, p.hp + p.regen * dt);
+  if (p.shieldMax && p.shield < p.shieldMax){ p.shRe = (p.shRe||0) + dt; if (p.shRe > 9){ p.shRe = 0; p.shield++; } }
+
+  // feast chain decay
+  if (p.chain > 0){ p.chainT -= dt; if (p.chainT <= 0){ p.chain = 0; } }
+
+  /* collapse of the universe */
+  if (!S.horizon){
+    S.collapseR -= (7 + S.time * 0.075) * dt;
+    if (S.collapseR < 300) S.collapseR = 300;
+  }
+  const pd = Math.hypot(p.x, p.y);
+  if (pd > S.collapseR - p.r * 0.4){
+    if (S.horizon){
+      if (p.lungeT > 0 && S.horizonCool <= 0){
+        S.horizonHP--; S.horizonCool = 1.1; S.collapseR += 230; S.flash = 1; S.shake = 1.4;
+        SFX.gulp(); p.mass += 14; S.score += 4000;
+        burst(p.x, p.y, 90, '#ffd36c', 520, 1.2);
+        pop(p.x, p.y - p.r, 'HORIZON BITE ' + (5 - S.horizonHP) + '/5', '#ffd36c');
+        p.vx *= -0.4; p.vy *= -0.4;
+        if (S.horizonHP <= 0) endRun(true);
+      } else if (S.horizonCool <= 0){
+        p.hp -= 16 * dt; S.shake = Math.max(S.shake, 0.5);
+      }
+    } else {
+      p.hp -= 30 * dt; S.shake = Math.max(S.shake, 0.6);
+      const n = pd || 1; p.vx -= p.x / n * 320 * dt; p.vy -= p.y / n * 320 * dt;
+      if (Math.random() < dt * 20) burst(p.x, p.y, 2, '#ff5d7a', 120, 0.5);
+      warnEl.style.opacity = 1; warnEl.textContent = 'THE COLLAPSE IS EATING YOU';
+    }
+  } else if (!S.horizon) warnEl.style.opacity = pd > S.collapseR * 0.86 ? 0.85 : 0;
+  S.horizonCool = Math.max(0, (S.horizonCool || 0) - dt);
+
+  /* bodies */
+  for (let i = S.bodies.length - 1; i >= 0; i--){
+    const b = S.bodies[i];
+    b.ang += b.spin * dt; b.pulse += dt * 2;
+    let bdx = p.x - b.x, bdy = p.y - b.y, bd = Math.hypot(bdx, bdy) || 1;
+    const eatable = b.r <= p.r * p.eatRatio;
+    // magnetism / evasion
+    if (p.magnet && eatable && bd < p.magnet){
+      const f = (1 - bd / p.magnet) * 300;
+      b.vx += bdx / bd * f * dt; b.vy += bdy / bd * f * dt;
+    }
+    if ((b.kind === 'spore' || b.kind === 'moon') && bd < 340 && !eatable){
+      b.vx -= bdx / bd * 120 * dt; b.vy -= bdy / bd * 120 * dt;
+    } else if (b.kind === 'spore' && bd < 260){
+      b.vx -= bdx / bd * 180 * dt; b.vy -= bdy / bd * 180 * dt;
+    }
+    b.x += b.vx * dt; b.y += b.vy * dt;
+    // keep inside the shrinking universe
+    const cd = Math.hypot(b.x, b.y);
+    if (cd > S.collapseR - b.r){
+      const nx = b.x / cd, ny = b.y / cd;
+      b.x = nx * (S.collapseR - b.r); b.y = ny * (S.collapseR - b.r);
+      const dot = b.vx * nx + b.vy * ny; b.vx -= 2 * dot * nx; b.vy -= 2 * dot * ny;
+    }
+    // interaction
+    if (bd < p.r + b.r * 0.75){
+      const relvx = p.vx - b.vx, relvy = p.vy - b.vy;
+      const nx = -bdx / bd, ny = -bdy / bd; // player -> body
+      const approach = relvx * nx + relvy * ny; // >0 means moving into it
+      const hazard = b.sp.danger > 0 && !p.ironGut;
+      if (eatable && (approach > 40 || bd < p.r * 0.8)){
+        // ---- SWALLOW ----
+        const armored = b.sp.danger === 1 && !p.ironGut && approach < 150;
+        if (armored){
+          b.vx += nx * 240; b.vy += ny * 240; p.vx *= 0.3; p.vy *= 0.3; p.open = 1;
+          pop(b.x, b.y, 'TOO SLOW — ARMOUR', '#b6c4d6'); SFX.bite(2);
+        } else if (hazard && b.sp.danger === 2 && approach < 260){
+          hurt(p, 9, b); pop(b.x, b.y, 'THORNS!', '#ff5d7a');
+          b.vx += nx * 300; b.vy += ny * 300;
+        } else {
+          eat(b, i);
+        }
+      } else if (!eatable){
+        // ---- BOUNCE / WOUND ----
+        if (p.worm && p.lungeT > 0){
+          p.x += nx * (b.r * 2.2 + p.r); p.y += ny * (b.r * 2.2 + p.r);
+          p.warpT = 0.35; burst(p.x, p.y, 22, '#b98cff', 240, 0.6); tone(700, 0.2, 'sine', 0.14, 200);
+        } else {
+          const push = Math.max(120, Math.abs(approach) * 0.9);
+          p.vx -= nx * push; p.vy -= ny * push;
+          b.vx += nx * push * 0.35 * (p.r / b.r); b.vy += ny * push * 0.35 * (p.r / b.r);
+          p.x -= nx * ((p.r + b.r * 0.75) - bd);
+          p.y -= ny * ((p.r + b.r * 0.75) - bd);
+          if (approach > 90 || hazard){
+            const dmg = (hazard ? 12 : 5) + Math.min(18, Math.abs(approach) * 0.035) + b.r * 0.03;
+            hurt(p, dmg, b);
+          }
+          p.chain = 0;
+        }
+      }
+    }
+  }
+
+  // repopulate the void
+  if (S.bodies.length < 26 && Math.random() < dt * 6) spawnOne();
+  // particles & popups
+  for (let i = S.parts.length - 1; i >= 0; i--){
+    const q = S.parts[i]; q.t += dt;
+    q.x += q.vx * dt; q.y += q.vy * dt; q.vx *= Math.pow(0.2, dt); q.vy *= Math.pow(0.2, dt);
+    if (q.t > q.life) S.parts.splice(i, 1);
+  }
+  for (let i = S.pops.length - 1; i >= 0; i--){
+    const q = S.pops[i]; q.t += dt; q.y -= 28 * dt; if (q.t > 1.4) S.pops.splice(i, 1);
+  }
+  // mutation offer
+  if (p.mass >= S.nextMutMass && !S.horizon){ S.nextMutMass = p.mass * 1.85 + 4; offerMutation(); }
+  // final act
+  if (!S.horizon && p.mass >= 110){
+    S.horizon = true; S.horizonHP = 5; S.flash = 1; SFX.gulp();
+    warnEl.style.opacity = 1;
+    warnEl.textContent = 'THE HORIZON IS EDIBLE — LUNGE INTO THE EDGE (5 BITES)';
+  }
+  if (p.hp <= 0) endRun(false);
+  // camera
+  cam.s = lerp(cam.s, camScale(), 1 - Math.pow(0.001, dt));
+  cam.x = lerp(cam.x, p.x + p.vx * 0.18, 1 - Math.pow(0.0005, dt));
+  cam.y = lerp(cam.y, p.y + p.vy * 0.18, 1 - Math.pow(0.0005, dt));
+  if (droneG && AC) droneG.gain.value = 0.1 + 0.14 * clamp((2100 - S.collapseR) / 1800, 0, 1);
+}
+
+function eat(b, i){
+  const p = S.player;
+  p.chain++; p.chainT = p.chainTime;
+  const mult = 1 + p.chain * p.chainGain;
+  const gain = b.sp.mass * (0.35 + b.r / (p.r * 6)) * mult * p.digest;
+  p.mass += gain;
+  S.score += Math.floor(b.r * 12 * mult);
+  p.hp = Math.min(p.maxhp, p.hp + 1.5 + b.r * 0.05);
+  p.open = 1; S.shake = Math.min(1.2, S.shake + b.r / (p.r * 6));
+  // absorb momentum (heavier = sluggish)
+  p.vx = (p.vx * p.mass + b.vx * b.sp.mass) / (p.mass + b.sp.mass);
+  p.vy = (p.vy * p.mass + b.vy * b.sp.mass) / (p.mass + b.sp.mass);
+  burst(b.x, b.y, Math.min(50, 10 + b.r | 0), b.sp.col, 160 + b.r * 3, 0.7);
+  if (b.r > p.r * 0.55) SFX.gulp(); else SFX.bite(1 + b.r / 20);
+  if (p.chain > 1) SFX.chain(p.chain);
+  pop(b.x, b.y, (p.chain > 1 ? 'x' + p.chain + '  ' : '') + '+' + gain.toFixed(1), b.sp.col);
+  S.bodies.splice(i, 1);
+  spawnOne();
+}
+function hurt(p, dmg, b){
+  if (p.iframe > 0) return;
+  if (p.shield > 0){
+    p.shield--; p.iframe = 0.8; S.shake = 0.8;
+    burst(p.x, p.y, 24, '#b98cff', 260, 0.6); tone(520, 0.3, 'sine', 0.16, 180);
+    pop(p.x, p.y - p.r, 'SHIELD', '#b98cff'); return;
+  }
+  p.hp -= dmg; p.iframe = 0.85; p.chain = 0;
+  S.shake = Math.min(1.5, 0.5 + dmg * 0.04); S.flash = Math.min(1, dmg * 0.03);
+  burst(p.x, p.y, 22, '#ff5d7a', 240, 0.6); SFX.hurt();
+  pop(p.x, p.y - p.r, '-' + Math.round(dmg), '#ff5d7a');
+}
+
+/* ---------------- render ---------------- */
+function render(S){
+  const p = S.player;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.fillStyle = '#04040a'; ctx.fillRect(0, 0, W, H);
+  const sh = S.shake * 14;
+  const ox = W/2 + rnd(-sh, sh), oy = H/2 + rnd(-sh, sh);
+  ctx.save(); ctx.translate(ox, oy); ctx.scale(cam.s, cam.s); ctx.translate(-cam.x, -cam.y);
+
+  // starfield (parallax, lensed toward the player)
+  for (let i = 0; i < S.stars.length; i++){
+    const st = S.stars[i];
+    let sx = st.x - cam.x * (1 - st.z) , sy = st.y - cam.y * (1 - st.z);
+    const dx = sx - p.x, dy = sy - p.y, d2 = dx*dx + dy*dy;
+    const lens = (p.r * p.r * 9) / (d2 + 1);
+    sx += dx * Math.min(0.7, lens); sy += dy * Math.min(0.7, lens);
+    ctx.globalAlpha = 0.25 + st.z * 0.6;
+    ctx.fillStyle = '#cfe2ff';
+    ctx.fillRect(sx, sy, st.s, st.s);
+  }
+  ctx.globalAlpha = 1;
+
+  // collapse horizon
+  const cr = S.collapseR;
+  const g = ctx.createRadialGradient(0, 0, cr * 0.86, 0, 0, cr * 1.5);
+  g.addColorStop(0, 'rgba(255,60,110,0)');
+  g.addColorStop(0.22, S.horizon ? 'rgba(255,200,90,0.35)' : 'rgba(255,60,110,0.30)');
+  g.addColorStop(1, S.horizon ? 'rgba(255,150,40,0.95)' : 'rgba(120,0,40,0.95)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, cr * 1.5, 0, TAU); ctx.fill();
+  ctx.save();
+  ctx.strokeStyle = S.horizon ? '#ffd36c' : '#ff5d7a';
+  ctx.lineWidth = 3 / cam.s; ctx.globalAlpha = 0.9;
+  ctx.beginPath();
+  for (let a = 0; a <= TAU + 0.05; a += 0.06){
+    const wob = Math.sin(a * 7 + S.time * 2.2) * 8 + Math.sin(a * 13 - S.time) * 5;
+    const rr = cr + wob;
+    if (a === 0) ctx.moveTo(Math.cos(a)*rr, Math.sin(a)*rr); else ctx.lineTo(Math.cos(a)*rr, Math.sin(a)*rr);
+  }
+  ctx.stroke(); ctx.restore();
+
+  // bodies
+  for (const b of S.bodies) drawBody(b, p);
+
+  // particles
+  for (const q of S.parts){
+    const a = 1 - q.t / q.life;
+    ctx.globalAlpha = a; ctx.fillStyle = q.col;
+    ctx.beginPath(); ctx.arc(q.x, q.y, q.r * a + 0.4, 0, TAU); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  drawPlayer(p);
+
+  // floating text
+  ctx.textAlign = 'center';
+  for (const q of S.pops){
+    ctx.globalAlpha = clamp(1.4 - q.t, 0, 1); ctx.fillStyle = q.col;
+    ctx.font = (16 / cam.s) + 'px Trebuchet MS';
+    ctx.fillText(q.txt, q.x, q.y);
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  if (S.flash > 0){
+    ctx.fillStyle = 'rgba(255,220,160,' + (S.flash * 0.45) + ')';
+    ctx.fillRect(0, 0, W, H);
+  }
+  // vignette
+  const vg = ctx.createRadialGradient(W/2, H/2, Math.min(W,H)*0.35, W/2, H/2, Math.max(W,H)*0.75);
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.75)');
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+}
+
+function drawBody(b, p){
+  const eat = b.r <= p.r * p.eatRatio;
+  ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.ang);
+  const gl = ctx.createRadialGradient(0, 0, b.r * 0.2, 0, 0, b.r * 1.9);
+  gl.addColorStop(0, b.sp.col); gl.addColorStop(0.5, b.sp.col + '55'); gl.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.globalAlpha = 0.5; ctx.fillStyle = gl;
+  ctx.beginPath(); ctx.arc(0, 0, b.r * 1.9, 0, TAU); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#0a0c16'; ctx.strokeStyle = b.sp.col; ctx.lineWidth = Math.max(1.4, b.r * 0.09);
+  ctx.beginPath();
+  if (b.kind === 'thorn'){
+    const n = 9;
+    for (let i = 0; i <= n * 2; i++){
+      const a = i / (n * 2) * TAU, rr = b.r * (i % 2 ? 0.62 : 1.15);
+      i === 0 ? ctx.moveTo(Math.cos(a)*rr, Math.sin(a)*rr) : ctx.lineTo(Math.cos(a)*rr, Math.sin(a)*rr);
+    }
+    ctx.closePath();
+  } else if (b.kind === 'satellite'){
+    ctx.rect(-b.r * 0.8, -b.r * 0.8, b.r * 1.6, b.r * 1.6);
+  } else if (b.kind === 'comet'){
+    ctx.moveTo(b.r, 0); ctx.lineTo(-b.r * 0.7, b.r * 0.75); ctx.lineTo(-b.r * 0.3, 0); ctx.lineTo(-b.r * 0.7, -b.r * 0.75); ctx.closePath();
+  } else if (b.kind === 'nebula'){
+    for (let i = 0; i <= 24; i++){
+      const a = i / 24 * TAU, rr = b.r * (1 + Math.sin(a * 3 + b.pulse) * 0.18);
+      i === 0 ? ctx.moveTo(Math.cos(a)*rr, Math.sin(a)*rr) : ctx.lineTo(Math.cos(a)*rr, Math.sin(a)*rr);
+    }
+    ctx.closePath();
+  } else ctx.arc(0, 0, b.r, 0, TAU);
+  ctx.fill(); ctx.stroke();
+  if (b.kind === 'moon'){
+    ctx.beginPath(); ctx.arc(b.r * 0.25, -b.r * 0.15, b.r * 0.26, 0, TAU);
+    ctx.fillStyle = '#ff5d7a'; ctx.fill();
+  }
+  ctx.rotate(-b.ang);
+  ctx.fillStyle = eat ? '#eaf6ff' : '#ff9ab0';
+  ctx.font = 'bold ' + Math.max(9, b.r * 0.8) + 'px monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.globalAlpha = 0.85; ctx.fillText(b.sp.mark, 0, 0); ctx.globalAlpha = 1;
+  if (!eat){
+    ctx.strokeStyle = 'rgba(255,93,122,0.55)'; ctx.lineWidth = 2; ctx.setLineDash([6, 8]);
+    ctx.beginPath(); ctx.arc(0, 0, b.r * 1.35, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
+  }
+  ctx.restore();
+}
+
+function drawPlayer(p){
+  const r = p.r, o = 0.30 + p.open * 0.75 + p.charge * 0.25;
+  ctx.save(); ctx.translate(p.x, p.y);
+  // gravitational halo
+  const hg = ctx.createRadialGradient(0, 0, r * 0.6, 0, 0, r * (3.4 + p.magnet / 900));
+  hg.addColorStop(0, 'rgba(160,220,255,0.35)');
+  hg.addColorStop(0.4, 'rgba(90,140,255,0.12)');
+  hg.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(0, 0, r * (3.4 + p.magnet / 900), 0, TAU); ctx.fill();
+  // bite ring (max edible size reference)
+  ctx.strokeStyle = 'rgba(127,227,255,0.55)'; ctx.lineWidth = 2 / cam.s; ctx.setLineDash([5, 7]);
+  ctx.beginPath(); ctx.arc(0, 0, r * p.eatRatio, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
+  ctx.rotate(p.ang);
+  // body: crescent mouth
+  ctx.fillStyle = p.iframe > 0 && Math.sin(S.time * 40) > 0 ? '#ff9ab0' : '#f2f8ff';
+  ctx.beginPath(); ctx.arc(0, 0, r, o, TAU - o); ctx.closePath(); ctx.fill();
+  // internal starfield
+  ctx.save(); ctx.clip();
+  ctx.fillStyle = '#10132a'; ctx.beginPath(); ctx.arc(0, 0, r * 0.82, 0, TAU); ctx.fill();
+  for (let i = 0; i < 16; i++){
+    const a = i * 2.399 + S.time * 0.4, rr = r * 0.75 * ((i % 5) / 5 + 0.1);
+    ctx.fillStyle = i % 3 ? '#7fe3ff' : '#b98cff';
+    ctx.fillRect(Math.cos(a) * rr, Math.sin(a) * rr, 2, 2);
+  }
+  ctx.restore();
+  // lips
+  ctx.strokeStyle = '#7fe3ff'; ctx.lineWidth = Math.max(1.5, r * 0.09);
+  ctx.beginPath(); ctx.arc(0, 0, r, o, TAU - o); ctx.stroke();
+  // comet fangs
+  if (p.eatRatio > 1){
+    ctx.fillStyle = '#ffd36c';
+    for (let i = 0; i < 7; i++){
+      const a = lerp(o + 0.15, TAU - o - 0.15, i / 6);
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+      ctx.lineTo(Math.cos(a + 0.1) * r * 0.75, Math.sin(a + 0.1) * r * 0.75);
+      ctx.lineTo(Math.cos(a - 0.1) * r * 0.75, Math.sin(a - 0.1) * r * 0.75);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+  ctx.rotate(-p.ang);
+  // shield membrane
+  if (p.shield > 0){
+    ctx.strokeStyle = 'rgba(185,140,255,' + (0.35 + 0.2 * p.shield) + ')';
+    ctx.lineWidth = 3 / cam.s;
+    ctx.beginPath(); ctx.arc(0, 0, r * 1.5, 0, TAU); ctx.stroke();
+  }
+  // charge arc
+  if (p.charge > 0){
+    ctx.strokeStyle = '#ffd36c'; ctx.lineWidth = 5 / cam.s;
+    ctx.beginPath(); ctx.arc(0, 0, r * 1.9, -Math.PI/2, -Math.PI/2 + TAU * p.charge); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,211,108,0.35)'; ctx.lineWidth = 2 / cam.s;
+    ctx.beginPath(); ctx.moveTo(0, 0);
+    ctx.lineTo(Math.cos(p.ang) * r * (3 + 9 * p.charge), Math.sin(p.ang) * r * (3 + 9 * p.charge));
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* ---------------- HUD & screens ---------------- */
+function drawHUD(){
+  const p = S.player, t = Math.floor(S.time);
+  hud.innerHTML =
+    'MASS <b>' + p.mass.toFixed(1) + '</b> / 110 &nbsp; <small>(horizon threshold)</small><br>' +
+    'SCORE <b>' + S.score + '</b><br>' +
+    'TIME ' + ('0' + Math.floor(t/60)).slice(-2) + ':' + ('0' + (t%60)).slice(-2) +
+    ' &nbsp; COLLAPSE ' + Math.round(S.collapseR) +
+    (S.mutTaken.length ? '<br><small>' + S.mutTaken.join(' · ') + '</small>' : '');
+  barf.style.width = clamp(p.hp / p.maxhp * 100, 0, 100) + '%';
+  ebf.style.width = clamp(p.mass / 110 * 100, 0, 100) + '%';
+  if (p.chain > 1){
+    chainEl.style.opacity = 1;
+    chainEl.textContent = 'FEAST CHAIN x' + p.chain + '  (' + p.chainT.toFixed(1) + 's)';
+    chainEl.style.color = p.chain > 6 ? '#ffd36c' : '#7fe3ff';
+  } else chainEl.style.opacity = 0;
+}
+
+function offerMutation(){
+  S.paused = true; SFX.mutate();
+  const pool = MUTATIONS.filter(m => !(m.id === 'fang' && S.player.eatRatio > 1) && !(m.id === 'worm' && S.player.worm) && !(m.id === 'gut' && S.player.ironGut));
+  const opts = [];
+  while (opts.length < 3 && pool.length){ const i = rint(0, pool.length - 1); opts.push(pool.splice(i, 1)[0]); }
+  overlay.classList.remove('hide');
+  overlay.innerHTML = '<h1>DIGESTION</h1><p>Your stomach reorganises reality. Choose one mutation — it lasts for this run.</p><div class="cards"></div>';
+  const cards = overlay.querySelector('.cards');
+  opts.forEach(m => {
+    const el = document.createElement('div'); el.className = 'card';
+    el.innerHTML = '<b>' + m.n + '</b><span>' + m.d + '</span>';
+    el.onclick = () => { m.f(S.player); S.mutTaken.push(m.n); overlay.classList.add('hide'); S.paused = false; SFX.chain(4); };
+    cards.appendChild(el);
+  });
+}
+
+function endRun(won){
+  if (S.over) return;
+  S.over = won ? 'win' : 'lose';
+  S.paused = true; overlay.classList.remove('hide');
+  if (won) SFX.win(); else { SFX.hurt(); tone(60, 2.2, 'sawtooth', 0.25, 24); }
+  const t = Math.floor(S.time);
+  overlay.innerHTML =
+    '<h1>' + (won ? 'YOU ATE THE HORIZON' : 'DIGESTED BY ENTROPY') + '</h1>' +
+    '<p>' + (won
+      ? 'The edge of reality slides down your throat. There is nothing left to be hungry in — which is, of course, its own kind of problem.'
+      : 'The collapse was hungrier. Your mass disperses into the void as a faint, disappointed hum.') +
+    '</p><p>MASS ' + S.player.mass.toFixed(1) + ' &nbsp;·&nbsp; SCORE ' + S.score +
+    ' &nbsp;·&nbsp; SURVIVED ' + ('0' + Math.floor(t/60)).slice(-2) + ':' + ('0' + (t%60)).slice(-2) +
+    (S.mutTaken.length ? '<br><small>MUTATIONS: ' + S.mutTaken.join(' · ') + '</small>' : '') + '</p>' +
+    '<div id="btn">SWALLOW AGAIN</div>';
+  overlay.querySelector('#btn').onclick = startRun;
+}
+
+function titleScreen(){
+  overlay.classList.remove('hide');
+  overlay.innerHTML =
+    '<h1>THE BIG SWALLOW</h1>' +
+    '<p><b>Eat the Horizon Before It Eats You.</b><br>' +
+    'You are a tiny gravitational mouth in a universe that is folding shut.</p>' +
+    '<p>MOUSE / TOUCH: move the cursor to set an orbital pull — you swing toward it.<br>' +
+    'HOLD to brace &amp; charge, RELEASE to lunge. Keyboard: WASD / Arrows steer, SPACE lunges.<br>' +
+    'Swallow anything that fits inside your dashed <span style="color:#7fe3ff">bite ring</span>. ' +
+    'Bodies circled in <span style="color:#ff5d7a">dashed red</span> are too big — they hurt.<br>' +
+    'Marks: <b>o</b> pebble · <b>&gt;</b> comet · <b>#</b> armoured (lunge hard) · <b>~</b> nebula · <b>*</b> spore · <b>X</b> thorns · <b>@</b> living moon.<br>' +
+    'Chain meals fast for a Feast Chain. Reach MASS 110, then lunge into the burning edge — five bites.</p>' +
+    '<div id="btn">BEGIN THE MEAL</div>';
+  overlay.querySelector('#btn').onclick = startRun;
+}
+
+function startRun(){
+  audioInit(); resetGame();
+  cam.x = 0; cam.y = 0; cam.s = camScale();
+  overlay.classList.add('hide'); warnEl.style.opacity = 0;
+}
+
+/* ---------------- main loop ---------------- */
+resetGame();
+titleScreen();
+let last = performance.now(), acc = 0;
+function frame(now){
+  let dt = (now - last) / 1000; last = now;
+  if (dt > 0.1) dt = 0.1;
+  // fixed-ish sub-stepping keeps physics stable at any framerate
+  acc += dt;
+  let guard = 0;
+  while (acc > 1/240 && guard < 8){
+    const step = Math.min(1/60, acc);
+    update(step, S);
+    acc -= step; guard++;
+  }
+  if (acc < 1/240) acc = 0;
+  render(S);
+  drawHUD();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Vacuum Cathedral — Sweep the Stars. Feed the Saint.</title>
+<style>
+  :root{
+    --gold:#e8c66a; --cyan:#6fe4ff; --crimson:#ff5c72; --violet:#b18bff; --lite:#fff4d8;
+    --ink:#0a0713; --panel:rgba(14,10,26,.88);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;height:100%;background:#07050f;color:var(--lite);
+    font-family:"Iowan Old Style","Palatino Linotype",Georgia,serif;overflow:hidden;
+    -webkit-user-select:none;user-select:none;touch-action:none}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+  canvas{display:block;background:#07050f;max-width:100%;max-height:100%}
+  .overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(circle at 50% 40%,rgba(60,30,90,.6),rgba(4,3,10,.96));
+    z-index:10;overflow:auto;padding:18px}
+  .card{max-width:860px;width:100%;background:var(--panel);border:1px solid rgba(232,198,106,.45);
+    border-radius:14px;padding:20px 24px;box-shadow:0 0 60px rgba(120,70,200,.35)}
+  h1{margin:0 0 2px;font-size:30px;letter-spacing:2px;color:var(--gold)}
+  h2{margin:0 0 12px;font-size:14px;letter-spacing:5px;color:var(--violet);font-weight:400;text-transform:uppercase}
+  h3{margin:14px 0 6px;font-size:14px;letter-spacing:2px;color:var(--cyan);text-transform:uppercase}
+  p,li{font-size:14px;line-height:1.5;color:#ded3ee}
+  .cols{display:flex;gap:20px;flex-wrap:wrap}
+  .col{flex:1 1 240px}
+  ul{margin:4px 0;padding-left:18px}
+  kbd{background:#241a3a;border:1px solid #4b3a70;border-radius:4px;padding:1px 6px;font-family:monospace;font-size:12px;color:var(--gold)}
+  button{font-family:inherit;font-size:15px;letter-spacing:2px;cursor:pointer;
+    background:linear-gradient(#3a2a5e,#221741);color:var(--gold);border:1px solid var(--gold);
+    border-radius:8px;padding:10px 20px;margin:6px 8px 0 0}
+  button:hover{background:linear-gradient(#4d3a78,#2d1f55)}
+  button.small{font-size:12px;padding:6px 12px;color:var(--cyan);border-color:#3b5f76}
+  .legend span{display:inline-block;margin:2px 10px 2px 0;font-size:13px}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px;vertical-align:middle}
+  label{font-size:13px;display:block;margin:5px 0;color:#cfc3e6}
+  input[type=checkbox]{transform:scale(1.15);margin-right:7px}
+  input[type=range]{vertical-align:middle;width:120px}
+  #routes{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .rnode{border:1px solid #57406f;border-radius:8px;padding:7px 10px;font-size:12px;min-width:120px;background:#150f26}
+  .rnode.done{border-color:var(--gold);color:var(--gold)}
+  .hidden{display:none!important}
+  #touchpad{position:fixed;bottom:14px;right:14px;z-index:5;display:none;gap:10px}
+  #touchpad button{width:78px;height:78px;border-radius:50%;font-size:12px;padding:0;margin:0}
+  .foot{font-size:11px;color:#7d6f96;margin-top:12px}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="cv" width="1080" height="640"></canvas></div>
+<div id="touchpad"><button id="tSuck">SUCK</button><button id="tBlow">BLOW</button></div>
+<div id="menu" class="overlay"><div class="card" id="menuCard"></div></div>
+<script>
+"use strict";
+/* ===================== VACUUM CATHEDRAL ===================== */
+const CV = document.getElementById('cv'), CX = CV.getContext('2d');
+const W = 1080, H = 640;
+const menu = document.getElementById('menu'), menuCard = document.getElementById('menuCard');
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const lerp=(a,b,t)=>a+(b-a)*t;
+const rnd=(a,b)=>a+Math.random()*(b-a);
+
+/* ---------- persistent records ---------- */
+const SAVE_KEY='vacuum_cathedral_v1';
+let SAVE={best:{},opts:{reduceMotion:false,highContrast:false,noHold:false,sfx:0.7,amb:0.5}};
+try{const s=JSON.parse(localStorage.getItem(SAVE_KEY));if(s&&s.best){SAVE=Object.assign(SAVE,s);SAVE.opts=Object.assign({reduceMotion:false,highContrast:false,noHold:false,sfx:0.7,amb:0.5},s.opts||{});}}catch(e){}
+function persist(){try{localStorage.setItem(SAVE_KEY,JSON.stringify(SAVE));}catch(e){}}
+
+/* ---------- audio (WebAudio, procedural) ---------- */
+let AC=null,masterSfx=null,masterAmb=null,hum=null,humGain=null,humFilt=null,dread=null,dreadGain=null;
+function initAudio(){
+  if(AC)return;
+  try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){return;}
+  masterSfx=AC.createGain();masterSfx.gain.value=SAVE.opts.sfx;masterSfx.connect(AC.destination);
+  masterAmb=AC.createGain();masterAmb.gain.value=SAVE.opts.amb;masterAmb.connect(AC.destination);
+  // vacuum hum
+  const buf=AC.createBuffer(1,AC.sampleRate*2,AC.sampleRate);const d=buf.getChannelData(0);
+  for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
+  hum=AC.createBufferSource();hum.buffer=buf;hum.loop=true;
+  humFilt=AC.createBiquadFilter();humFilt.type='bandpass';humFilt.frequency.value=420;humFilt.Q.value=3;
+  humGain=AC.createGain();humGain.gain.value=0;
+  hum.connect(humFilt);humFilt.connect(humGain);humGain.connect(masterSfx);hum.start();
+  // dread sub pulse
+  dread=AC.createOscillator();dread.type='sine';dread.frequency.value=38;
+  dreadGain=AC.createGain();dreadGain.gain.value=0;
+  dread.connect(dreadGain);dreadGain.connect(masterAmb);dread.start();
+}
+function tone(f,dur,type,vol,slide){
+  if(!AC)return;const o=AC.createOscillator(),g=AC.createGain();
+  o.type=type||'sine';o.frequency.setValueAtTime(f,AC.currentTime);
+  if(slide)o.frequency.exponentialRampToValueAtTime(Math.max(30,slide),AC.currentTime+dur);
+  g.gain.setValueAtTime(0.0001,AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(vol||0.15,AC.currentTime+0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001,AC.currentTime+dur);
+  o.connect(g);g.connect(masterSfx);o.start();o.stop(AC.currentTime+dur+0.05);
+}
+function chord(base,vol){[1,1.26,1.5,2].forEach((m,i)=>setTimeout(()=>tone(base*m,0.9,'triangle',(vol||0.1)),i*70));}
+function knock(){tone(70,0.35,'sine',0.28,44);tone(120,0.18,'square',0.05);}
+
+/* ---------- input ---------- */
+const input={mx:W/2,my:H/2,suck:false,blow:false,focus:0.5,down:false};
+let scale=1,offX=0,offY=0;
+function resize(){
+  const r=Math.min(window.innerWidth/W,window.innerHeight/H);
+  CV.style.width=(W*r)+'px';CV.style.height=(H*r)+'px';
+  const b=CV.getBoundingClientRect();scale=W/b.width;offX=b.left;offY=b.top;
+}
+window.addEventListener('resize',resize);
+function pt(e){const b=CV.getBoundingClientRect();input.mx=(e.clientX-b.left)*(W/b.width);input.my=(e.clientY-b.top)*(H/b.height);}
+CV.addEventListener('mousemove',pt);
+CV.addEventListener('contextmenu',e=>e.preventDefault());
+CV.addEventListener('mousedown',e=>{initAudio();pt(e);
+  if(SAVE.opts.noHold){ if(e.button===0)input.suck=!input.suck,input.blow=false; else input.blow=!input.blow,input.suck=false; }
+  else { if(e.button===0)input.suck=true; else input.blow=true; }
+  e.preventDefault();});
+window.addEventListener('mouseup',e=>{if(!SAVE.opts.noHold){if(e.button===0)input.suck=false;else input.blow=false;}});
+CV.addEventListener('wheel',e=>{input.focus=clamp(input.focus+(e.deltaY>0?-0.12:0.12),0,1);e.preventDefault();},{passive:false});
+CV.addEventListener('touchstart',e=>{initAudio();const t=e.touches[0];pt(t);e.preventDefault();},{passive:false});
+CV.addEventListener('touchmove',e=>{pt(e.touches[0]);e.preventDefault();},{passive:false});
+const tp=document.getElementById('touchpad');
+if('ontouchstart' in window){tp.style.display='flex';}
+function bindTouch(id,key){const b=document.getElementById(id);
+  b.addEventListener('touchstart',e=>{initAudio();input[key]=true;e.preventDefault();});
+  b.addEventListener('touchend',e=>{input[key]=false;e.preventDefault();});}
+bindTouch('tSuck','suck');bindTouch('tBlow','blow');
+
+const keys={};
+window.addEventListener('keydown',e=>{
+  keys[e.code]=true;initAudio();
+  if(e.code==='Space'){input.blow=SAVE.opts.noHold?!input.blow:true;e.preventDefault();}
+  if(e.code==='ShiftLeft'||e.code==='KeyF'){input.suck=SAVE.opts.noHold?!input.suck:true;}
+  if(e.code==='KeyQ')input.focus=clamp(input.focus-0.15,0,1);
+  if(e.code==='KeyE')input.focus=clamp(input.focus+0.15,0,1);
+  if(e.code==='KeyR'&&G.mode==='play')startChapel(G.chapel);
+  if(e.code==='Escape'&&G.mode==='play'){G.mode='pause';showPause();}
+});
+window.addEventListener('keyup',e=>{keys[e.code]=false;
+  if(!SAVE.opts.noHold){if(e.code==='Space')input.blow=false;if(e.code==='ShiftLeft'||e.code==='KeyF')input.suck=false;}
+});
+/* ===================== GAME STATE ===================== */
+const G={mode:'menu',chapel:0,t:0,saint:0,objs:[],parts:[],reservoir:[],msg:'',msgT:0,
+  delivered:{},done:false,fail:'',bumps:0,relics:0,shake:0,streams:[],whisper:0};
+
+/* object archetypes ---------------------------------------------------- */
+const TYPES={
+  dust:   {r:5, mass:0.35,drag:2.6,col:'#cdbde8',tag:'dust',  name:'Star Dust'},
+  glass:  {r:9, mass:1.0, drag:1.2,col:'#7ff0d8',tag:'glass', name:'Glass Shard',fragile:true},
+  iron:   {r:12,mass:3.2, drag:0.7,col:'#d8a25c',tag:'iron',  name:'Iron Incense'},
+  mote:   {r:6, mass:0.25,drag:3.2,col:'#fff3b0',tag:'mote',  name:'Choir Mote',glow:true},
+  pearl:  {r:11,mass:2.2, drag:0.9,col:'#b18bff',tag:'pearl', name:'Gravity Pearl',grav:true},
+  wax:    {r:9, mass:1.4, drag:1.4,col:'#f2e2b8',tag:'wax',   name:'Votive Wax'},
+  hazard: {r:11,mass:2.0, drag:1.0,col:'#ff5c72',tag:'hazard',name:'Reactive Matter',haz:true},
+  relic:  {r:10,mass:1.1, drag:1.3,col:'#e8c66a',tag:'relic', name:'Relic',relic:true},
+  // fused
+  prism:  {r:11,mass:1.0, drag:1.2,col:'#9dfcff',tag:'prism', name:'Prism Bell',glow:true},
+  censer: {r:13,mass:3.0, drag:0.8,col:'#cf9dff',tag:'censer',name:'Censer Anchor',grav:true},
+  seal:   {r:10,mass:0.9, drag:1.6,col:'#ffe58a',tag:'seal',  name:'Luminous Seal',glow:true}
+};
+const FUSE=[['dust','glass','prism'],['iron','pearl','censer'],['mote','wax','seal']];
+
+function spawn(type,x,y,vx,vy){
+  const t=TYPES[type];
+  const o={type:type,x:x,y:y,vx:vx||0,vy:vy||0,r:t.r,mass:t.mass,drag:t.drag,
+    col:t.col,tag:t.tag,name:t.name,fragile:!!t.fragile,haz:!!t.haz,glow:!!t.glow,
+    grav:!!t.grav,relic:!!t.relic,alive:true,spin:rnd(0,6.28),spinv:rnd(-3,3),lit:0,gone:false};
+  G.objs.push(o);return o;
+}
+function puff(x,y,c,n,sp){
+  for(let i=0;i<(n||8);i++){const a=rnd(0,6.28),s=rnd(20,(sp||120));
+    G.parts.push({x:x,y:y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:rnd(.3,.8),t:0,c:c||'#fff'});}
+}
+function say(t){G.msg=t;G.msgT=4.2;}
+
+/* ---------- chapel definitions ---------- */
+const CHAPELS=[
+ {name:'I — The Dust Narthex',
+  brief:'Hold LEFT MOUSE to inhale dust into the nozzle. Release near the golden reliquary and press SPACE (or right mouse) to exhale the offering.',
+  need:{dust:6}, limit:100, walls:[[0,0,1080,26],[0,614,1080,26],[0,0,26,640],[1054,0,26,640],[300,300,120,26]],
+  altar:{x:900,y:480,w:110,h:110,accept:['dust'],label:'RELIQUARY'},
+  make(){ for(let i=0;i<9;i++)spawn('dust',rnd(120,420),rnd(120,320),rnd(-10,10),0);
+          spawn('relic',150,540);}},
+
+ {name:'II — Chapel of the Bright Motes',
+  brief:'Choir Motes carry light. Feed six motes to the altar. Wide focus (Q) moves them gently; narrow focus (E) is powerful but noisy.',
+  need:{mote:6}, limit:100, walls:[[0,0,1080,26],[0,614,1080,26],[0,0,26,640],[1054,0,26,640],[430,120,26,320],[640,300,26,320]],
+  altar:{x:880,y:120,w:110,h:110,accept:['mote','seal'],label:'LIGHT ALTAR'},
+  make(){ for(let i=0;i<8;i++)spawn('mote',rnd(90,380),rnd(120,520));
+          spawn('wax',200,560);spawn('relic',540,560);spawn('hazard',760,540);}},
+
+ {name:'III — The Iron Censer Loft',
+  brief:'Iron Incense is heavy: narrow the nozzle (E) to move it. Deliver 3 irons. Do not shatter the glass — cracked glass wakes the Saint.',
+  need:{iron:3}, limit:100, walls:[[0,0,1080,26],[0,614,1080,26],[0,0,26,640],[1054,0,26,640],[500,26,26,300],[500,430,26,210]],
+  altar:{x:900,y:450,w:120,h:120,accept:['iron','censer'],label:'CENSER PORT'},
+  make(){ for(let i=0;i<4;i++)spawn('iron',rnd(100,400),rnd(200,500));
+          for(let i=0;i<3;i++)spawn('glass',rnd(120,430),rnd(80,180));
+          spawn('pearl',300,560);spawn('relic',700,120);}},
+
+ {name:'IV — Sanctum of the Fused Rite',
+  brief:'Store TWO compatible objects in the reservoir to FUSE them. Dust+Glass=Prism Bell. Iron+Pearl=Censer Anchor. Mote+Wax=Luminous Seal. Offer any two ritual tools.',
+  need:{fused:2}, limit:100, walls:[[0,0,1080,26],[0,614,1080,26],[0,0,26,640],[1054,0,26,640],[380,260,320,26]],
+  altar:{x:880,y:260,w:130,h:130,accept:['prism','censer','seal'],label:'GRAND ALTAR'},
+  make(){ spawn('dust',150,150);spawn('dust',200,180);spawn('glass',260,140);
+          spawn('iron',160,520);spawn('pearl',250,540);
+          spawn('mote',420,120);spawn('wax',470,160);
+          spawn('hazard',700,520);spawn('hazard',760,440);spawn('relic',980,560);}}
+];
+/* ===================== CHAPEL SETUP ===================== */
+let CH=null;
+function startChapel(i){
+  G.chapel=i;CH=CHAPELS[i];
+  G.objs=[];G.parts=[];G.reservoir=[];G.t=0;G.saint=0;G.delivered={};G.done=false;
+  G.fail='';G.bumps=0;G.relics=0;G.shake=0;G.whisper=0;
+  CH.make();
+  G.mode='play';menu.classList.add('hidden');
+  say(CH.brief);
+}
+function needText(){
+  const n=CH.need,out=[];
+  for(const k in n){const have=G.delivered[k]||0;out.push((TYPES[k]?TYPES[k].name:'Ritual Tool')+' '+have+'/'+n[k]);}
+  return out.join('   ·   ');
+}
+function needMet(){for(const k in CH.need){if((G.delivered[k]||0)<CH.need[k])return false;}return true;}
+
+/* ===================== UPDATE ===================== */
+function saintUp(a,why){
+  G.saint=clamp(G.saint+a,0,100);
+  if(a>1.5){G.shake=Math.min(14,G.shake+a*0.6);knock();}
+  if(why)say(why);
+}
+function update(dt){
+  if(G.mode!=='play')return;
+  G.t+=dt;
+  if(G.msgT>0)G.msgT-=dt;
+  G.shake=Math.max(0,G.shake-dt*12);
+
+  const nx=input.mx,ny=input.my;
+  const focus=input.focus;                     // 0 = wide, 1 = narrow
+  const range=lerp(300,150,focus);
+  const power=lerp(1400,4200,focus);
+  const cone=lerp(1.0,0.34,focus);             // half-angle
+  const active=input.suck||input.blow;
+
+  // audio response
+  if(AC){
+    const target=active?lerp(0.05,0.16,focus):0.0;
+    humGain.gain.value=lerp(humGain.gain.value,target,dt*6);
+    humFilt.frequency.value=lerp(humFilt.frequency.value,input.suck?lerp(260,900,focus):lerp(140,320,focus),dt*5);
+    dreadGain.gain.value=lerp(dreadGain.gain.value,(G.saint/100)*0.22,dt*2);
+    if(dread)dread.frequency.value=34+Math.sin(G.t*1.4)*3;
+  }
+
+  // airflow streamlines (visual)
+  if(active&&!SAVE.opts.reduceMotion){
+    for(let i=0;i<2;i++){
+      const a=rnd(-cone,cone)+ (input.suck? rnd(0,6.283) : rnd(0,6.283));
+      const d=input.suck?range*rnd(.4,1):18;
+      G.streams.push({x:nx+Math.cos(a)*d,y:ny+Math.sin(a)*d,a:a,life:.5,t:0,suck:input.suck});
+    }
+  }
+  for(let i=G.streams.length-1;i>=0;i--){const s=G.streams[i];s.t+=dt;
+    const sp=s.suck?-260:300;s.x+=Math.cos(s.a)*sp*dt;s.y+=Math.sin(s.a)*sp*dt;
+    if(s.t>s.life)G.streams.splice(i,1);}
+
+  // gravity sources
+  const gravs=G.objs.filter(o=>o.grav&&o.alive);
+
+  for(const o of G.objs){
+    if(!o.alive)continue;
+    // airflow force
+    if(active){
+      const dx=o.x-nx,dy=o.y-ny,d=Math.hypot(dx,dy)||1;
+      if(d<range){
+        const dirA=Math.atan2(dy,dx);
+        // narrow focus = directional cone based on aim relative to canvas centre-ish flow: use full radial for simplicity, cone scales strength
+        const fall=1-d/range;
+        let f=power*fall*fall/(o.mass*4);
+        if(focus>0.5)f*=lerp(1,1.6,(focus-0.5)*2);
+        const sgn=input.suck?-1:1;
+        o.vx+=Math.cos(dirA)*f*sgn*dt;
+        o.vy+=Math.sin(dirA)*f*sgn*dt;
+        // noise: narrow flow disturbs the saint
+        saintUp(dt*focus*focus*1.6*(o.mass>2?1.4:0.6),null);
+      }
+    }
+    // gravity pearls
+    for(const g of gravs){ if(g===o)continue;
+      const dx=g.x-o.x,dy=g.y-o.y,d=Math.hypot(dx,dy);
+      if(d<190&&d>4){const f=2400/(d*d+80);o.vx+=dx/d*f*dt*40/(o.mass+1);o.vy+=dy/d*f*dt*40/(o.mass+1);} }
+    // drift & drag (zero-g cathedral: light ambient settle)
+    o.vy+=18*dt*(o.mass*0.25);
+    o.vx*=Math.max(0,1-o.drag*0.35*dt);o.vy*=Math.max(0,1-o.drag*0.35*dt);
+    // speed cap (authored physics)
+    const sp=Math.hypot(o.vx,o.vy),cap=520;
+    if(sp>cap){o.vx*=cap/sp;o.vy*=cap/sp;}
+    o.x+=o.vx*dt;o.y+=o.vy*dt;o.spin+=o.spinv*dt;
+    if(o.glow)o.lit=0.6+Math.sin(G.t*4+o.spin)*0.4;
+
+    // walls
+    for(const w of CH.walls){
+      if(o.x+o.r>w[0]&&o.x-o.r<w[0]+w[2]&&o.y+o.r>w[1]&&o.y-o.r<w[1]+w[3]){
+        const cx=w[0]+w[2]/2,cy=w[1]+w[3]/2;
+        const ox=(w[2]/2+o.r)-Math.abs(o.x-cx), oy=(w[3]/2+o.r)-Math.abs(o.y-cy);
+        const impact=Math.hypot(o.vx,o.vy);
+        if(ox<oy){o.x+=(o.x<cx?-ox:ox);o.vx*=-0.42;}else{o.y+=(o.y<cy?-oy:oy);o.vy*=-0.42;}
+        if(impact>230){
+          G.bumps++;puff(o.x,o.y,o.col,6,90);
+          if(o.fragile&&impact>300){o.alive=false;puff(o.x,o.y,'#7ff0d8',18,200);
+            saintUp(14,'A holy pane shatters. The floor answers.');tone(900,0.4,'sawtooth',0.12,180);}
+          else saintUp(impact/95,null);
+          if(AC&&impact>300)tone(110+impact*0.1,0.16,'sine',0.07);
+        }
+      }
+    }
+  }
+  // object-object soft collisions
+  for(let i=0;i<G.objs.length;i++)for(let j=i+1;j<G.objs.length;j++){
+    const a=G.objs[i],b=G.objs[j];if(!a.alive||!b.alive)continue;
+    const dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy),rr=a.r+b.r;
+    if(d<rr&&d>0.01){
+      const ov=(rr-d)/2,ux=dx/d,uy=dy/d;
+      a.x-=ux*ov;a.y-=uy*ov;b.x+=ux*ov;b.y+=uy*ov;
+      const rel=(b.vx-a.vx)*ux+(b.vy-a.vy)*uy;
+      if(rel<0){const imp=-rel*0.6;
+        a.vx-=ux*imp/a.mass;a.vy-=uy*imp/a.mass;b.vx+=ux*imp/b.mass;b.vy+=uy*imp/b.mass;
+        if(-rel>250){ if((a.haz||b.haz)){saintUp(9,'Reactive matter struck something. Hush!');puff((a.x+b.x)/2,(a.y+b.y)/2,'#ff5c72',14,180);}
+          else saintUp(1.4,null); }
+      }
+    }
+  }
+  // ---- reservoir intake ----
+  if(input.suck){
+    for(const o of G.objs){
+      if(!o.alive||o.gone)continue;
+      if(Math.hypot(o.x-nx,o.y-ny)<26&&G.reservoir.length<2){
+        o.alive=false;o.gone=true;G.reservoir.push(o.type);
+        puff(nx,ny,o.col,10,140);tone(360+TYPES[o.type].mass*40,0.18,'triangle',0.08,700);
+        if(o.haz){saintUp(10,'Reactive matter in the sacred lung! Expel it.');}
+        tryFuse();
+      }
+    }
+  }
+  // ---- expel ----
+  if(input.blow&&G.reservoir.length){
+    if(!G._blowCd||G._blowCd<=0){
+      const type=G.reservoir.shift();
+      const a=Math.atan2(ny-H/2,nx-H/2);
+      const dir=Math.atan2(input.my-G.lastNy0||0,1);
+      const ang=Math.atan2(ny-(G.pny!==undefined?G.pny:ny-1),nx-(G.pnx!==undefined?G.pnx:nx))||0;
+      const o=spawn(type,nx,ny,0,0);
+      const th=(Math.hypot(nx-G.pnx||0,0),0);
+      const aim=Math.atan2(ny-H*0.5,nx-W*0.12); // exhale outward from cathedral spine
+      const sp=lerp(210,430,input.focus);
+      o.vx=Math.cos(aim)*sp;o.vy=Math.sin(aim)*sp;
+      puff(nx,ny,o.col,14,220);tone(220,0.4,'sawtooth',0.08,90);
+      G._blowCd=0.22;
+      saintUp(lerp(0.6,3.2,input.focus),null);
+    }
+  }
+  if(G._blowCd>0)G._blowCd-=dt;
+  G.pnx=nx;G.pny=ny;
+
+  // ---- altar delivery ----
+  const A=CH.altar;
+  for(const o of G.objs){
+    if(!o.alive||o.gone)continue;
+    if(o.x>A.x&&o.x<A.x+A.w&&o.y>A.y&&o.y<A.y+A.h){
+      const ok=A.accept.indexOf(o.tag)>=0;
+      const fused=(o.tag==='prism'||o.tag==='censer'||o.tag==='seal');
+      if(ok){
+        o.alive=false;o.gone=true;
+        const key=(CH.need.fused&&fused)?'fused':o.tag;
+        G.delivered[key]=(G.delivered[key]||0)+1;
+        puff(o.x,o.y,'#e8c66a',20,200);chord(392,0.09);
+        G.saint=clamp(G.saint-2,0,100);
+      } else if(o.relic){
+        o.alive=false;o.gone=true;G.relics++;puff(o.x,o.y,'#e8c66a',24,240);chord(523,0.08);
+      } else {
+        o.alive=false;o.gone=true;puff(o.x,o.y,'#ff5c72',18,200);
+        saintUp(16,'A forbidden offering. Something beneath turns over.');
+      }
+    }
+  }
+  // relic pickup via nozzle counts too
+  for(const o of G.objs){ if(o.relic&&!o.alive&&!o._counted&&o.gone){} }
+
+  // particles
+  for(let i=G.parts.length-1;i>=0;i--){const p=G.parts[i];p.t+=dt;p.x+=p.vx*dt;p.y+=p.vy*dt;
+    p.vx*=0.96;p.vy*=0.96;if(p.t>p.life)G.parts.splice(i,1);}
+
+  // saint slow breathing pressure
+  G.saint=clamp(G.saint - dt*0.6 + dt*(G.t>90?0.25:0),0,100);
+  G.whisper=G.saint/100;
+
+  // outcomes
+  if(!G.done){
+    if(G.saint>=100){G.done=true;G.fail='THE SAINT OPENS AN EYE';G.mode='over';setTimeout(showResult,650);
+      if(AC){tone(46,2.2,'sine',0.3,30);tone(64,2.0,'triangle',0.14,40);}}
+    else if(needMet()){G.done=true;G.fail='';G.mode='over';chord(523,0.12);setTimeout(showResult,700);}
+  }
+}
+function tryFuse(){
+  if(G.reservoir.length<2)return;
+  const [a,b]=G.reservoir;
+  for(const f of FUSE){
+    if((f[0]===a&&f[1]===b)||(f[0]===b&&f[1]===a)){
+      G.reservoir.length=0;G.reservoir.push(f[2]);
+      say('FUSED → '+TYPES[f[2]].name);
+      chord(659,0.09);puff(input.mx,input.my,TYPES[f[2]].col,26,260);
+      return;
+    }
+  }
+}
+/* ===================== RENDER ===================== */
+function bg(){
+  const hc=SAVE.opts.highContrast;
+  const g=CX.createLinearGradient(0,0,0,H);
+  if(hc){g.addColorStop(0,'#05040a');g.addColorStop(1,'#08060e');}
+  else{g.addColorStop(0,'#140a26');g.addColorStop(0.55,'#0b0718');g.addColorStop(1,'#160b1e');}
+  CX.fillStyle=g;CX.fillRect(0,0,W,H);
+  // dead star halo
+  if(!hc){
+    const r=CX.createRadialGradient(160,110,10,160,110,300);
+    r.addColorStop(0,'rgba(180,140,255,.30)');r.addColorStop(1,'rgba(180,140,255,0)');
+    CX.fillStyle=r;CX.fillRect(0,0,600,460);
+    CX.fillStyle='#221033';CX.beginPath();CX.arc(160,110,44,0,6.283);CX.fill();
+  }
+  // stained-glass arches
+  CX.save();CX.globalAlpha=SAVE.opts.highContrast?0.10:0.22;
+  for(let i=0;i<6;i++){
+    const x=90+i*180;
+    CX.strokeStyle=['#6fe4ff','#b18bff','#e8c66a','#ff5c72'][i%4];CX.lineWidth=3;
+    CX.beginPath();CX.moveTo(x-60,H);CX.lineTo(x-60,260);CX.quadraticCurveTo(x,140,x+60,260);CX.lineTo(x+60,H);CX.stroke();
+  }
+  CX.restore();
+  // the sleeping saint beneath the floor
+  const s=G.saint/100;
+  CX.save();CX.globalAlpha=0.12+s*0.45;
+  CX.fillStyle='#4a2a72';
+  CX.beginPath();
+  CX.moveTo(0,H);
+  for(let x=0;x<=W;x+=30){
+    const y=H-40-Math.sin(x*0.006+G.t*(SAVE.opts.reduceMotion?0:0.4))*(12+s*26)-s*40;
+    CX.lineTo(x,y);
+  }
+  CX.lineTo(W,H);CX.closePath();CX.fill();
+  if(s>0.45){ // eye-like stars in the cracks
+    CX.globalAlpha=(s-0.45)*1.4;
+    for(let i=0;i<5;i++){const x=140+i*200,y=H-58-Math.sin(i+G.t*0.5)*10;
+      CX.fillStyle='#ffd9f0';CX.beginPath();CX.ellipse(x,y,10,4+Math.sin(G.t*2+i)*2,0,0,6.283);CX.fill();
+      CX.fillStyle='#20081a';CX.beginPath();CX.arc(x,y,2.4,0,6.283);CX.fill();}
+  }
+  CX.restore();
+}
+function drawObj(o){
+  CX.save();CX.translate(o.x,o.y);CX.rotate(o.spin);
+  if(o.glow&&!SAVE.opts.highContrast){
+    const g=CX.createRadialGradient(0,0,1,0,0,o.r*4);
+    g.addColorStop(0,o.col);g.addColorStop(1,'rgba(0,0,0,0)');
+    CX.globalAlpha=0.35+(o.lit||0)*0.3;CX.fillStyle=g;CX.beginPath();CX.arc(0,0,o.r*4,0,6.283);CX.fill();CX.globalAlpha=1;
+  }
+  CX.fillStyle=o.col;CX.strokeStyle='rgba(255,255,255,.75)';CX.lineWidth=1.6;
+  if(o.tag==='glass'||o.tag==='prism'){
+    CX.beginPath();CX.moveTo(0,-o.r);CX.lineTo(o.r,o.r*.6);CX.lineTo(-o.r,o.r*.6);CX.closePath();CX.fill();CX.stroke();
+  } else if(o.tag==='iron'||o.tag==='censer'){
+    CX.beginPath();CX.rect(-o.r*.8,-o.r*.8,o.r*1.6,o.r*1.6);CX.fill();CX.stroke();
+    CX.beginPath();CX.moveTo(0,-o.r*.8);CX.lineTo(0,-o.r*1.5);CX.stroke();
+  } else if(o.relic){
+    CX.beginPath();for(let i=0;i<5;i++){const a=-1.57+i*1.2566;
+      CX.lineTo(Math.cos(a)*o.r,Math.sin(a)*o.r);CX.lineTo(Math.cos(a+.628)*o.r*.45,Math.sin(a+.628)*o.r*.45);}
+    CX.closePath();CX.fill();CX.stroke();
+  } else {
+    CX.beginPath();CX.arc(0,0,o.r,0,6.283);CX.fill();CX.stroke();
+  }
+  if(o.haz){CX.strokeStyle='#ff5c72';CX.lineWidth=2;CX.beginPath();CX.arc(0,0,o.r+4,0,6.283);CX.stroke();}
+  if(o.grav){CX.strokeStyle='rgba(177,139,255,.5)';CX.lineWidth=1;
+    CX.beginPath();CX.arc(0,0,o.r+9+Math.sin(G.t*2)*3,0,6.283);CX.stroke();}
+  CX.restore();
+}
+function render(){
+  CX.save();
+  if(G.shake>0.2&&!SAVE.opts.reduceMotion)CX.translate(rnd(-G.shake,G.shake),rnd(-G.shake,G.shake));
+  bg();
+  if(!CH){CX.restore();return;}
+  // walls / brass ducts
+  for(const w of CH.walls){
+    CX.fillStyle=SAVE.opts.highContrast?'#2b2b3a':'#241a33';CX.fillRect(w[0],w[1],w[2],w[3]);
+    CX.strokeStyle='#6fe4ff';CX.globalAlpha=.5;CX.lineWidth=2;CX.strokeRect(w[0]+1,w[1]+1,w[2]-2,w[3]-2);CX.globalAlpha=1;
+  }
+  // altar
+  const A=CH.altar,pu=0.5+Math.sin(G.t*2)*0.5;
+  CX.save();CX.strokeStyle='#e8c66a';CX.lineWidth=3;
+  CX.shadowColor='#e8c66a';CX.shadowBlur=SAVE.opts.highContrast?0:14+pu*14;
+  CX.strokeRect(A.x,A.y,A.w,A.h);
+  CX.globalAlpha=.12+pu*.1;CX.fillStyle='#e8c66a';CX.fillRect(A.x,A.y,A.w,A.h);
+  CX.restore();
+  CX.fillStyle='#e8c66a';CX.font='11px Georgia';CX.textAlign='center';
+  CX.fillText(A.label,A.x+A.w/2,A.y-8);
+  CX.textAlign='left';
+  // streams
+  for(const s of G.streams){CX.globalAlpha=(1-s.t/s.life)*0.45;
+    CX.strokeStyle=s.suck?'#6fe4ff':'#ffd9a0';CX.lineWidth=1.6;
+    CX.beginPath();CX.moveTo(s.x,s.y);CX.lineTo(s.x-Math.cos(s.a)*10,s.y-Math.sin(s.a)*10);CX.stroke();}
+  CX.globalAlpha=1;
+  for(const o of G.objs)if(o.alive)drawObj(o);
+  for(const p of G.parts){CX.globalAlpha=1-p.t/p.life;CX.fillStyle=p.c;CX.fillRect(p.x-2,p.y-2,4,4);}
+  CX.globalAlpha=1;
+  drawNozzle();
+  CX.restore();
+  drawHUD();
+}
+function drawNozzle(){
+  const nx=input.mx,ny=input.my;
+  const range=lerp(300,150,input.focus);
+  CX.save();
+  CX.strokeStyle=input.suck?'#6fe4ff':(input.blow?'#ffcf8a':'rgba(180,200,230,.35)');
+  CX.lineWidth=2;
+  CX.beginPath();CX.arc(nx,ny,range,0,6.283);CX.globalAlpha=.16;CX.stroke();
+  CX.globalAlpha=1;
+  CX.beginPath();CX.arc(nx,ny,20,0,6.283);CX.stroke();
+  CX.beginPath();CX.moveTo(nx-28,ny);CX.lineTo(nx+28,ny);CX.moveTo(nx,ny-28);CX.lineTo(nx,ny+28);
+  CX.globalAlpha=.6;CX.stroke();CX.globalAlpha=1;
+  // reservoir contents orbiting the nozzle
+  G.reservoir.forEach((t,i)=>{
+    const a=G.t*2+i*3.14,rr=32;
+    const T=TYPES[t];
+    CX.fillStyle=T.col;CX.beginPath();CX.arc(nx+Math.cos(a)*rr,ny+Math.sin(a)*rr,T.r*0.8,0,6.283);CX.fill();
+    CX.strokeStyle='#fff';CX.lineWidth=1;CX.stroke();
+  });
+  CX.restore();
+}
+function bar(x,y,w,h,v,c1,c2,label){
+  CX.fillStyle='rgba(10,7,19,.7)';CX.fillRect(x,y,w,h);
+  const g=CX.createLinearGradient(x,0,x+w,0);g.addColorStop(0,c1);g.addColorStop(1,c2);
+  CX.fillStyle=g;CX.fillRect(x+2,y+2,(w-4)*clamp(v,0,1),h-4);
+  CX.strokeStyle='rgba(232,198,106,.6)';CX.lineWidth=1;CX.strokeRect(x,y,w,h);
+  CX.fillStyle='#ded3ee';CX.font='11px Georgia';CX.fillText(label,x,y-5);
+}
+function drawHUD(){
+  CX.save();
+  CX.fillStyle='rgba(8,5,16,.72)';CX.fillRect(0,0,W,54);
+  CX.strokeStyle='rgba(232,198,106,.35)';CX.beginPath();CX.moveTo(0,54);CX.lineTo(W,54);CX.stroke();
+  CX.fillStyle='#e8c66a';CX.font='16px Georgia';CX.fillText(CH?CH.name:'',18,26);
+  CX.fillStyle='#cfd8ff';CX.font='13px Georgia';CX.fillText(needText(),18,44);
+  // saint meter
+  const s=G.saint/100;
+  bar(W-300,16,280,20,s,'#6c3f9e', s>0.7?'#ff5c72':'#b18bff','SAINT METER  '+Math.floor(G.saint)+'%');
+  if(s>0.7){CX.fillStyle='rgba(255,92,114,'+(0.3+Math.sin(G.t*8)*0.25)+')';CX.font='12px Georgia';
+    CX.fillText('IT STIRS',W-300,52);}
+  // focus + reservoir
+  CX.fillStyle='#9fd8ee';CX.font='12px Georgia';
+  CX.fillText('FOCUS: '+(input.focus<0.34?'WIDE / gentle':input.focus<0.67?'MEDIUM':'NARROW / loud')+'   (Q/E or wheel)',W/2-140,26);
+  CX.fillText('RESERVOIR: '+(G.reservoir.length?G.reservoir.map(t=>TYPES[t].name).join(' + '):'empty')+'   ·  RELICS '+G.relics,W/2-140,44);
+  CX.fillText('TIME '+G.t.toFixed(1)+'s',18,H-16);
+  // message plaque
+  if(G.msgT>0){
+    const al=clamp(G.msgT,0,1);
+    CX.globalAlpha=al;
+    const txt=G.msg,lines=wrap(txt,72);
+    const bh=lines.length*20+22;
+    CX.fillStyle='rgba(12,8,24,.9)';CX.fillRect(W/2-360,H-24-bh,720,bh);
+    CX.strokeStyle='#e8c66a';CX.strokeRect(W/2-360,H-24-bh,720,bh);
+    CX.fillStyle='#f3e6c8';CX.font='14px Georgia';CX.textAlign='center';
+    lines.forEach((l,i)=>CX.fillText(l,W/2,H-24-bh+24+i*20));
+    CX.textAlign='left';CX.globalAlpha=1;
+  }
+  // whisper distortion at high meter
+  if(G.saint>60&&!SAVE.opts.reduceMotion){
+    CX.globalAlpha=(G.saint-60)/160;CX.fillStyle='#ff9ac0';CX.font='italic 13px Georgia';
+    const wsp=['be still','sweep gently','it hears the brass','do not exhale','one more offering'];
+    CX.fillText(wsp[Math.floor(G.t*0.6)%wsp.length],W/2-60,H-70);CX.globalAlpha=1;
+  }
+  CX.restore();
+}
+function wrap(t,n){
+  const words=t.split(' '),out=[];let l='';
+  for(const w of words){ if((l+w).length>n){out.push(l);l='';} l+=w+' '; }
+  if(l)out.push(l);return out;
+}
+
+/* ===================== LOOP ===================== */
+let last=performance.now();
+function loop(now){
+  let dt=(now-last)/1000;last=now;
+  if(dt>0.05)dt=0.05;
+  update(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+/* ===================== SCREENS ===================== */
+function show(html){menu.classList.remove('hidden');menuCard.innerHTML=html;}
+function legendHTML(){
+  const items=[['#cdbde8','Star Dust — light, clogs filters'],['#7ff0d8','Glass Shard — FRAGILE'],
+   ['#d8a25c','Iron Incense — heavy'],['#fff3b0','Choir Mote — light/power'],
+   ['#b18bff','Gravity Pearl — local pull'],['#f2e2b8','Votive Wax'],
+   ['#ff5c72','Reactive Matter — HAZARD'],['#e8c66a','Relic — optional score']];
+  return '<div class="legend">'+items.map(i=>'<span><i class="dot" style="background:'+i[0]+'"></i>'+i[1]+'</span>').join('')+'</div>';
+}
+function routeHTML(){
+  return '<div id="routes">'+CHAPELS.map((c,i)=>{
+    const b=SAVE.best[i];
+    return '<div class="rnode'+(b?' done':'')+'"><b>'+c.name+'</b><br>'+
+      (b?('score '+b.score+' · '+b.time+'s · relics '+b.relics):'unvisited')+'</div>';
+  }).join('')+'</div>';
+}
+function optsHTML(){
+  const o=SAVE.opts;
+  return '<h3>Accessibility &amp; Sound</h3>'+
+  '<label><input type="checkbox" id="oRM" '+(o.reduceMotion?'checked':'')+'>Reduced motion (no shake / drift)</label>'+
+  '<label><input type="checkbox" id="oHC" '+(o.highContrast?'checked':'')+'>High contrast</label>'+
+  '<label><input type="checkbox" id="oNH" '+(o.noHold?'checked':'')+'>No-hold controls (click toggles airflow)</label>'+
+  '<label>Effects <input type="range" id="oSfx" min="0" max="1" step="0.05" value="'+o.sfx+'"></label>'+
+  '<label>Ambience <input type="range" id="oAmb" min="0" max="1" step="0.05" value="'+o.amb+'"></label>';
+}
+function bindOpts(){
+  const q=id=>document.getElementById(id);
+  if(q('oRM'))q('oRM').onchange=e=>{SAVE.opts.reduceMotion=e.target.checked;persist();};
+  if(q('oHC'))q('oHC').onchange=e=>{SAVE.opts.highContrast=e.target.checked;persist();};
+  if(q('oNH'))q('oNH').onchange=e=>{SAVE.opts.noHold=e.target.checked;input.suck=input.blow=false;persist();};
+  if(q('oSfx'))q('oSfx').oninput=e=>{SAVE.opts.sfx=+e.target.value;if(masterSfx)masterSfx.gain.value=+e.target.value;persist();};
+  if(q('oAmb'))q('oAmb').oninput=e=>{SAVE.opts.amb=+e.target.value;if(masterAmb)masterAmb.gain.value=+e.target.value;persist();};
+}
+function showTitle(){
+  G.mode='menu';input.suck=input.blow=false;
+  show('<h1>VACUUM CATHEDRAL</h1><h2>Sweep the Stars. Feed the Saint.</h2>'+
+   '<p>You are the last sacristan of an orbital cathedral circling a dead star. Beneath the translucent floor, a machine-saint sleeps. Clean the chapels with the sacred vacuum cannon — quietly.</p>'+
+   '<div class="cols"><div class="col"><h3>Control Card</h3><ul>'+
+   '<li><b>Move mouse</b> — aim the nozzle</li>'+
+   '<li><b>Hold Left Mouse</b> (or <kbd>Shift</kbd>/<kbd>F</kbd>) — suction</li>'+
+   '<li><b>Hold Right Mouse</b> or <kbd>Space</kbd> — repulsion / expel reservoir</li>'+
+   '<li><b>Wheel</b> or <kbd>Q</kbd>/<kbd>E</kbd> — nozzle focus (wide ↔ narrow)</li>'+
+   '<li><kbd>R</kbd> restart chapel · <kbd>Esc</kbd> pause</li>'+
+   '<li>Touch: drag to aim, on-screen SUCK / BLOW buttons</li></ul></div>'+
+   '<div class="col"><h3>Rite</h3><ul><li>Suck an object within 26px of the nozzle to <b>store</b> it (2 slots).</li>'+
+   '<li>Two compatible stored items <b>fuse</b> into a ritual tool.</li>'+
+   '<li>Narrow focus is powerful but <b>loud</b>; loud wakes the Saint.</li>'+
+   '<li>Impacts, shattered glass, hazards and wrong offerings raise the Saint Meter.</li></ul>'+optsHTML()+'</div></div>'+
+   '<h3>Object Legend</h3>'+legendHTML()+
+   '<h3>Route Map</h3>'+routeHTML()+
+   '<button id="bPlay">PLAY FIRST CHAPEL</button>'+
+   CHAPELS.map((c,i)=>i>0&&SAVE.best[i-1]?'<button class="small" data-ch="'+i+'">Chapel '+(i+1)+'</button>':'').join('')+
+   '<div class="foot">No jump scares. No gore. Only scale, sound and consequence.</div>');
+  document.getElementById('bPlay').onclick=()=>{initAudio();startChapel(0);};
+  menuCard.querySelectorAll('[data-ch]').forEach(b=>b.onclick=()=>{initAudio();startChapel(+b.dataset.ch);});
+  bindOpts();
+}
+function showPause(){
+  input.suck=input.blow=false;
+  show('<h1>PAUSED</h1><h2>'+CH.name+'</h2><p>'+CH.brief+'</p><p><b>Required:</b> '+needText()+
+   '</p><p>Saint Meter: '+Math.floor(G.saint)+'% · Relics: '+G.relics+'</p>'+optsHTML()+
+   '<button id="bRes">RESUME</button><button id="bRe" class="small">RESTART CHAPEL</button><button id="bMenu" class="small">ROUTE MAP</button>');
+  document.getElementById('bRes').onclick=()=>{menu.classList.add('hidden');G.mode='play';};
+  document.getElementById('bRe').onclick=()=>startChapel(G.chapel);
+  document.getElementById('bMenu').onclick=showTitle;
+  bindOpts();
+}
+function showResult(){
+  input.suck=input.blow=false;
+  const won=!G.fail;
+  const time=+G.t.toFixed(1);
+  const calm=Math.max(0,100-Math.floor(G.saint));
+  const score=won?Math.max(0,Math.round(1000 - time*4 + calm*8 + G.relics*300 - G.bumps*15)):0;
+  let pbTxt='';
+  if(won){
+    const b=SAVE.best[G.chapel];
+    if(!b||score>b.score){SAVE.best[G.chapel]={score:score,time:time,relics:G.relics,calm:calm};persist();
+      pbTxt='<p style="color:#e8c66a"><b>NEW PERSONAL BEST</b></p>';}
+    else pbTxt='<p>Personal best: '+b.score+' ('+b.time+'s, '+b.relics+' relics)</p>';
+  }
+  const next=G.chapel+1;
+  const report='<h3>Disturbance Report</h3><ul>'+
+    '<li>Time in chapel: '+time+'s</li>'+
+    '<li>Hard impacts registered: '+G.bumps+'</li>'+
+    '<li>Saint Meter remaining calm: '+calm+'%</li>'+
+    '<li>Relics recovered: '+G.relics+'</li></ul>';
+  show((won?'<h1>CHAMBER CLEANSED</h1><h2>the hymn settles</h2>'
+          :'<h1 style="color:#ff5c72">'+G.fail+'</h1><h2>the attempt ends</h2>')+
+   '<p>'+(won?'The reliquary seals with a warm chord. Below, the vast ribs of the saint rise and fall, undisturbed.'
+             :'Pressure, brass and carelessness travelled downward. The floor seams brighten. Try a wider, quieter focus.')+'</p>'+
+   (won?'<p><b>Score: '+score+'</b></p>'+pbTxt:'')+report+
+   (won&&next<CHAPELS.length?'<button id="bNext">NEXT CHAPEL</button>':'')+
+   (won&&next>=CHAPELS.length?'<p style="color:#e8c66a">You have walked the whole route. The cathedral is clean; the saint dreams on. Replay chapels to improve scores and relic counts.</p>':'')+
+   '<button id="bRetry" class="small">REPLAY CHAPEL</button><button id="bMap" class="small">ROUTE MAP</button>'+
+   '<h3>Route Map</h3>'+routeHTML());
+  const bn=document.getElementById('bNext');
+  if(bn)bn.onclick=()=>startChapel(next);
+  document.getElementById('bRetry').onclick=()=>startChapel(G.chapel);
+  document.getElementById('bMap').onclick=showTitle;
+}
+
+/* ===================== BOOT ===================== */
+resize();
+showTitle();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
